@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="theme-color" content="#12121f">
+<title>Neighborhood Among Us</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div id="toast" class="hidden"></div>
+
+<section id="screen-home" class="screen">
+  <h1 class="title">Neighborhood<br>Among Us</h1>
+  <input id="name-input" placeholder="Your name" maxlength="16" autocomplete="off">
+  <button id="btn-create" class="big">Create game</button>
+  <div class="join-row">
+    <input id="code-input" placeholder="CODE" maxlength="4" autocomplete="off">
+    <button id="btn-join" class="big">Join</button>
+  </div>
+  <p id="gps-warning" class="hint"></p>
+</section>
+
+<section id="screen-lobby" class="screen hidden">
+  <h2>Room <span id="lobby-code" class="mono"></span></h2>
+  <button id="btn-players-tab" class="tab-toggle">👥 Players <span id="players-count" class="pill"></span> <span class="chevron">▾</span></button>
+  <div id="lobby-players" class="card hidden"></div>
+  <div id="host-panel" class="hidden">
+    <div id="lobby-scroll">
+      <h3>Game settings</h3>
+      <div id="settings-form" class="card"></div>
+      <div class="setting-row">
+        <label for="set-timerAutoStart">Start the round timer immediately when I tap Start game</label>
+        <input type="checkbox" id="set-timerAutoStart">
+      </div>
+      <p class="hint">Turn this off to deal out roles and tasks first, then start the clock yourself when everyone's ready — handy for explaining tasks before time starts running.</p>
+      <h3>Tasks <span id="task-count" class="pill"></span></h3>
+      <p class="hint">Tap the map where a task should be, give it a name. Blue dots are your created tasks — tap one to remove it.</p>
+      <div id="lobby-map" class="map"></div>
+      <h3>Play area <span class="pill" id="area-pill">none</span></h3>
+      <p class="hint">Outline where the game happens — every player sees it shaded on their map.</p>
+      <div class="join-row">
+        <button id="btn-area-draw" class="small">✏️ Draw: tap corners</button>
+        <button id="btn-area-save" class="small hidden">✔ Finish area</button>
+        <button id="btn-area-clear" class="small">Clear</button>
+      </div>
+      <h3>Solo testing</h3>
+      <p class="hint">Add fake players you control from your screen, so you can try kills, reports, and votes by yourself. Remove them before a real game.</p>
+      <button id="btn-addbot" class="small">+ Add test bot</button>
+    </div>
+    <button id="btn-start" class="big go">Start game</button>
+  </div>
+  <p id="waiting-msg" class="hint hidden">Waiting for the host to start the game…</p>
+</section>
+
+<section id="screen-game" class="screen game hidden">
+  <div id="topbar">
+    <span id="round-chip" class="chip"></span>
+    <span id="progress-chip" class="chip"></span>
+    <span id="gps-chip" class="chip"></span>
+  </div>
+  <div id="round-popover" class="hidden">
+    <button id="btn-toggle-timer"></button>
+  </div>
+  <div id="map-wrap">
+    <div id="game-map" class="map grow"></div>
+    <div id="report-overlay"></div>
+  </div>
+  <div id="panel">
+    <div id="dead-area"></div>
+    <div id="task-list"></div>
+    <div id="kill-panel"></div>
+    <button id="btn-callvote" class="small hidden">🚨 Call emergency meeting (1 use)</button>
+    <button id="btn-seelocation" class="small hidden">👁 See location (1 use)</button>
+    <div id="test-panel"></div>
+  </div>
+</section>
+
+<button id="btn-endgame-early" class="hidden" title="End game early">➡</button>
+
+<section id="screen-meeting" class="screen hidden">
+  <h2>🚨 Emergency Meeting</h2>
+  <p id="meeting-info"></p>
+  <p class="hint">Talk it out on the voice call, then vote here.</p>
+  <p id="meeting-timer" class="timer"></p>
+  <div id="vote-list"></div>
+  <button id="btn-confirm-vote" class="big hidden">Confirm vote</button>
+  <p id="meeting-status" class="hint"></p>
+  <div id="meeting-test"></div>
+</section>
+
+<section id="screen-end" class="screen hidden">
+  <h1 id="end-title" class="title"></h1>
+  <p id="end-sub"></p>
+  <button id="btn-again" class="big hidden">Back to lobby</button>
+</section>
+
+<div id="camera-overlay" class="hidden">
+  <div id="camera-topbar">
+    <span id="camera-gps" class="chip ok">GPS on</span>
+    <button id="camera-close" class="small">✕ Close</button>
+  </div>
+  <div id="camera-stage">
+    <video id="camera-video" autoplay playsinline muted></video>
+    <img id="camera-photo" class="hidden" alt="your photo">
+  </div>
+  <div id="camera-controls">
+    <button id="camera-flip" class="round">🔄</button>
+    <button id="camera-shutter"></button>
+    <span class="round-spacer"></span>
+  </div>
+  <div id="camera-review" class="hidden">
+    <button id="camera-retake" class="small">Retake</button>
+    <button id="camera-keep" class="go">Keep photo</button>
+  </div>
+  <canvas id="camera-canvas" class="hidden"></canvas>
+</div>
+
+<div id="dialog" class="modal hidden">
+  <div class="modal-inner card">
+    <p id="dialog-title"></p>
+    <p id="dialog-body" class="hint hidden"></p>
+    <input id="dialog-input" class="hidden" maxlength="40" autocomplete="off">
+    <div class="join-row">
+      <button id="dialog-cancel" class="small">Cancel</button>
+      <button id="dialog-ok">OK</button>
+    </div>
+  </div>
+</div>
+
+<div id="role-modal" class="modal hidden">
+  <div class="modal-inner">
+    <h1 id="role-modal-title"></h1>
+    <p id="role-modal-sub"></p>
+    <button id="role-modal-ok" class="big">Got it</button>
+  </div>
+</div>
+
+<div id="kill-modal" class="modal hidden">
+  <div class="modal-inner">
+    <h1 id="kill-modal-title">You have been killed</h1>
+    <button id="kill-modal-ok" class="big">Got it</button>
+  </div>
+</div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

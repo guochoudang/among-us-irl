@@ -1,0 +1,49 @@
+# Neighborhood Among Us — project summary
+
+Read this file first in any new session before touching code. It replaces re-reading server.js/app.js from scratch.
+
+## What this is
+A phone-browser (no app store) version of Among Us played in person around Maximilian's Cupertino neighborhood (Baxley Court / Linda Vista area). Node + Socket.IO backend (`server.js`), vanilla JS/HTML/CSS frontend (`public/`), Leaflet + OpenStreetMap for the map. Run with `npm start`, served on port 3000. `.claude/launch.json` configures the preview tool to run it.
+
+Maximilian has no coding background — explain everything in plain, on-screen terms, no jargon (see memory: user_no_coding_background).
+
+## Locked-in map
+- `DEFAULT_AREA` in server.js: a hand-traced polygon following real streets (Santa Teresa Dr east edge, Hyannisport Dr + Rae Lane corridor north, Linda Vista Dr west/south edges with a Baxley Court bump). Linda Vista Park is deliberately EXCLUDED (west edge runs straight down Linda Vista Dr).
+- `DEFAULT_TASKS`: 21 real tasks, each with name/lat/lng/explanation, some flagged `photo: true` (in-app camera required), `collaborative: true` (need a 2nd person, exactly one dealt per player), or `anywhere: true` (wild-card, no map pin, no location check).
+- To use a different map/tasks later: replace `DEFAULT_AREA`/`DEFAULT_TASKS`, or the host can draw a custom area / add tasks per-room in the lobby regardless.
+
+## Core game rules currently implemented
+- Roles: 1 impostor default (max 2), rest crew. Lobby, playing, meeting, ended phases.
+- Kill: impostor-only, needs range + off-cooldown. Cooldown default 120s, but a short **15s opening grace** applies at game start (not the full cooldown) so nobody waits 2 minutes before first blood. Cooldown/report timers run on real wall-clock time — independent of the round timer, so pausing the round clock never pauses cooldowns.
+- No body pinning: killing someone does NOT freeze a "body" location. A dead player must physically stay put; reporting checks the dead player's LIVE phone position against a reporter's position. Kill-once/report-once enforced.
+- Tasks: dealt per-player at game start. Each player gets exactly 1 collaborative task + solo tasks up to `tasksPerPlayer`. Progress counted by shared `assignmentId`, not per-copy.
+- Task sharing on death: the instant someone dies, a COPY of each unfinished real task is immediately handed to a living crewmate (never impostor), balanced so nobody gets a 2nd copy from that dead player until everyone else has 1. Either copy being completed finishes it for both (shows a 🤝 icon to the receiver). No more "disburse timer" — it's instant now.
+- Meetings: emergency-meeting call is a per-player one-time button (crew AND impostor each get exactly one call for the whole game; disappears after use). Body-report and emergency-call both use the identical meeting flow (same vibration pattern, full-screen takeover, votingTime setting, default 120s). Voting: tap a name only SELECTS it, must tap a separate "Confirm vote" button to actually cast — prevents accidental taps. Any alive player who never votes before the timer runs out is auto-counted as a "skip" vote. Ties/skip-majority = nobody ejected. End screen no longer shows "(Nobody was ejected.)" text on an IMPOSTOR-win screen (only shown on crew-win screens where it's relevant).
+- See Location power: crew-only (never impostor), one use per game, only while alive. Reveals ceil(50%) of other living players (impostor could be among them, unlabeled) as pink dots with name labels, frozen at the position they were at when used, for 20 real seconds, then auto-clears. Refuses (without burning the use) if no other player's location is known yet — this happened with fresh test bots that hadn't been placed; now bots auto-place themselves at game start (see below) so this shouldn't trigger with bots anymore either.
+- Win conditions: crew wins if all real tasks done or all impostors ejected/dead; impostor wins if crew count <= impostor count, OR if the round timer hits zero while impostor(s) still alive and undiscovered ("timeout" win, distinct end-screen message).
+- Round timer: visible top-left of game screen, ticks down, PAUSES during meetings automatically, resumes after. Host can also manually pause/resume anytime by tapping the clock (pops out a Pause/Unpause button, clock turns green while held) — independent of meeting-pauses. Lobby has a checkbox "Start the round timer immediately when I tap Start game" (default on); turning it off deals roles/tasks immediately but leaves the clock held at full time until the host manually releases it (same pause button, shows "Start Timer" instead of "Unpause" when never-yet-started).
+- Round length / tasksPerPlayer auto-scale by player count (host can override by hand, which disables auto-scale; a "Use recommended for this many players" button reverts). Table currently: 2p=18min, 3p=20min, 4p=23min, 5p=25min, 6p=28min, 7p=32min, 8p=35min, 9p=38min, 10p=40min tasksPerPlayer 3/3/4/4/4/5/5/5/6 respectively.
+
+## UI/privacy details worth remembering
+- Top bar shows NO role label (so a glance at someone's phone doesn't out the impostor) — just round timer chip, task-progress chip, GPS status chip.
+- Kill button lives at the BOTTOM of the scrollable task panel (below the fold, behind a spacer), only rendered at all when a victim is in range AND cooldown is up — no button, no countdown visible otherwise. A short double-vibration fires the instant a kill becomes available (Android only; iPhone has no web vibration API, button is still there).
+- Report button floats bottom-left over the map, appears only when a reportable body is in range.
+- Meeting start = full-screen takeover + two-buzz vibration (450ms-250ms-450ms pattern) on any phone, regardless of trigger (report or emergency call).
+- Tasks are collapsed rows; tap to expand into Location / Explain / (Photo if applicable) / Done buttons, so no accidental taps.
+- In-app camera for photo tasks: opens a live camera view INSIDE the game (never leaves the app, so GPS/meetings keep working), snap → review → Keep. Photos are NOT saved anywhere (shown once, discarded) — user explicitly wants a "save to my photos" button added LATER when this becomes a real installable phone app, not now (see memory).
+- Players tab in lobby is now a collapsible "👥 Players (N/10)" section (tap to expand names), separate from Game Settings.
+
+## Solo-testing (host-only) features
+Host can add up to MAX_PLAYERS "test bots" in the lobby (counted as real players for role/task dealing). Host sees a 🧪 Test controls panel with per-bot buttons: To me, Do task, Kill nearest (impostor bots only), Report body, Call meeting, See location, and a vote dropdown during meetings. Bots are now AUTO-PLACED on the map at game start (scattered ~150-400ft around the host or the play-area center) so they're immediately visible/draggable — previously bots had no position until manually placed, which caused visible confusion (see-location revealing 0 players, no map pins). Host can also drag bot pins directly on the map. This whole panel/roles are NEVER visible to non-host players or in real games without bots.
+
+## Testing approach used throughout
+Every feature has been verified two ways: (1) an automated Node script using `socket.io-client` connecting directly to a locally-run server instance (port 3123, separate from the dev preview on 3000) simulating multiple players, checking exact state transitions; (2) a visual pass in the Claude Preview tool driving the real browser client via `preview_eval`/`preview_screenshot`. Test scripts live in the scratchpad dir (a temp path, not in the repo) — e.g. simtest.js, bottest.js, deathtest.js, disbtest.js, timertest.js, newfeatures.js, timerhold.js, fixes2.js. Server has two env-gated test-only floors (`process.env.TEST_MODE`) that lower `votingTime` and `roundLength` minimums so tests don't need to wait out real 30s/120s minimums — these do NOT affect normal `npm start` (no TEST_MODE set), only appear when a test explicitly sets `TEST_MODE=1`.
+
+## Known open items / things NOT yet done
+- "Save to my photos" button for the in-app camera — deliberately deferred until Maximilian decides to turn this into a real installable phone-store app (memory: project_among_us_phone_app_todos.md).
+- A generic/blank version of the map+tasks for eventual public (non-private-neighborhood) use — also deferred, same memory note. Underlying app already supports a host drawing their own area/tasks from scratch, so this is a "swap the defaults" change, not a rebuild.
+- Per-task custom photo-count enforcement (e.g. "Brick, Wood, and Steel" asks for 3 photos but the camera only requires 1 to unlock Done) — currently honor-system by design choice, not a bug.
+- No out-of-bounds warning if a player leaves the drawn play-area (was mentioned as a possible future feature, not requested yet).
+
+## Where things stand right now
+Maximilian is doing a full manual click-through with bots in the Claude Preview panel to decide if the game is ready. Two bugs were just found and fixed in that process (opening kill-cooldown grace, See-Location refusing when bots have no position + bots not auto-placing). Once he's satisfied, next step is deploying this so he can test on an actual phone (see README.md in the repo for the HTTPS/cloudflared tunnel instructions already written for this).

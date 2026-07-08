@@ -1,0 +1,467 @@
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg: #12121f;
+  --card: #1e1e30;
+  --text: #f0f0f5;
+  --muted: #9a9ab0;
+  --accent: #4e6cff;
+  --green: #3ecf6e;
+  --red: #ff4757;
+  --orange: #ffa502;
+}
+
+html, body { height: 100%; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.hidden { display: none !important; }
+.mono { font-family: ui-monospace, Menlo, monospace; letter-spacing: 0.15em; }
+
+.screen {
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 18px;
+  max-width: 520px;
+  margin: 0 auto;
+}
+.screen.game { padding: 0; gap: 0; max-width: none; height: 100dvh; overflow: hidden; }
+
+#screen-lobby { height: 100dvh; overflow: hidden; padding-bottom: 0; padding-left: 8px; padding-right: 8px; }
+#host-panel { display: flex; flex-direction: column; flex: 1; min-height: 0; gap: 14px; }
+/* space-between spreads any leftover vertical space evenly between sections
+   instead of leaving it as one dead gap above the Start button — if the
+   content already overflows (needs scrolling), this has no effect and the
+   normal gap/scroll behavior applies. */
+#lobby-scroll { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; justify-content: space-between; }
+#btn-start {
+  flex: none;
+  font-size: 2.6rem;
+  padding: 32px 14px;
+  margin: 0 0 14px 0;
+}
+
+.title { text-align: center; margin-top: 8vh; line-height: 1.15; }
+#screen-end .title { margin-top: 20vh; }
+#screen-end p { text-align: center; color: var(--muted); }
+
+h2, h3 { margin-top: 6px; }
+.hint { color: var(--muted); font-size: 0.85rem; }
+
+input {
+  background: var(--card);
+  border: 1px solid #34344e;
+  color: var(--text);
+  border-radius: 10px;
+  padding: 14px;
+  font-size: 1.05rem;
+  width: 100%;
+}
+#code-input { text-transform: uppercase; text-align: center; font-family: ui-monospace, Menlo, monospace; }
+
+button {
+  border: none;
+  border-radius: 10px;
+  background: var(--accent);
+  color: white;
+  font-size: 1.05rem;
+  font-weight: 600;
+  padding: 14px;
+  cursor: pointer;
+}
+button:active { filter: brightness(1.2); }
+button:disabled { background: #34344e; color: var(--muted); }
+button.big { width: 100%; }
+button.go { background: var(--green); color: #08210f; }
+button.danger { background: var(--red); }
+button.small { font-size: 0.85rem; padding: 8px 12px; background: #34344e; }
+
+.join-row { display: flex; gap: 10px; }
+.join-row input { width: 40%; }
+.join-row button { flex: 1; }
+
+.card {
+  background: var(--card);
+  border-radius: 12px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.player-row { display: flex; align-items: center; gap: 8px; }
+.player-row .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--green); flex: none; }
+.player-row .dot.off { background: var(--muted); }
+.player-row .dead-tag { color: var(--red); font-size: 0.8rem; }
+.player-row .host-tag { color: var(--orange); font-size: 0.8rem; }
+
+.setting-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.setting-row label { font-size: 0.9rem; flex: 1; }
+.setting-row input { width: 90px; padding: 8px; text-align: center; }
+.setting-row input[type="checkbox"] { width: 22px; height: 22px; padding: 0; flex: none; }
+
+.tab-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  background: var(--card);
+  text-align: left;
+  font-weight: 600;
+}
+.tab-toggle .chevron { margin-left: auto; color: var(--muted); }
+
+.pill {
+  background: var(--accent);
+  border-radius: 999px;
+  font-size: 0.8rem;
+  padding: 2px 10px;
+  vertical-align: middle;
+}
+
+.map { height: 300px; border-radius: 12px; }
+.map.grow { flex: none; height: 50dvh; border-radius: 0; min-height: 200px; }
+
+/* Lobby (create-game) screen — everything scoped here 3x, so nothing on
+   other screens (home, game, meeting, end) is affected. Left #btn-start out
+   of this pass since it was already deliberately enlarged earlier. */
+#screen-lobby h2 { font-size: 4.5rem; }
+#screen-lobby h3 { font-size: 3.5rem; }
+#screen-lobby .hint { font-size: 2.55rem; }
+#screen-lobby .tab-toggle { font-size: 3.15rem; padding: 42px; gap: 24px; }
+#screen-lobby .pill { font-size: 2.4rem; padding: 6px 30px; }
+#screen-lobby input { font-size: 3.15rem; padding: 42px; }
+#screen-lobby button { font-size: 3.15rem; padding: 42px; }
+#screen-lobby button.small { font-size: 2.55rem; padding: 24px 36px; }
+#screen-lobby .card { padding: 36px; gap: 24px; }
+/* flex-wrap + overflow-wrap let a long label drop the input to its own line
+   instead of forcing the whole row (and everything below it) to overflow
+   horizontally — a fixed-width input next to 2.7rem label text doesn't fit
+   side-by-side on a phone-width screen otherwise. */
+#screen-lobby .setting-row { gap: 30px; flex-wrap: wrap; }
+#screen-lobby .setting-row label { font-size: 2.7rem; min-width: 0; overflow-wrap: break-word; }
+#screen-lobby .setting-row input { width: 270px; max-width: 100%; padding: 24px; }
+#screen-lobby .setting-row input[type="checkbox"] { width: 66px; height: 66px; }
+/* flex-wrap so Draw/Finish/Clear drop to their own line instead of
+   overflowing — at 2.55rem button text, two of these side by side no longer
+   fit a phone-width screen even after shrinking. */
+#screen-lobby .join-row { gap: 30px; flex-wrap: wrap; }
+#screen-lobby .join-row button { flex: 1 1 100%; }
+#screen-lobby .player-row { font-size: 2.7rem; gap: 24px; }
+#screen-lobby .player-row .dot { width: 27px; height: 27px; }
+#screen-lobby .player-row .dead-tag, #screen-lobby .player-row .host-tag { font-size: 2.4rem; }
+#screen-lobby #lobby-map { height: 900px; }
+
+/* Game screen */
+#topbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 14px 10px;
+  background: var(--card);
+  justify-content: space-between;
+}
+.chip {
+  font-size: 2.3rem;
+  font-weight: 700;
+  padding: 8px 12px;
+  border-radius: 999px;
+  background: #34344e;
+}
+.chip.impostor { background: var(--red); }
+.chip.crew { background: var(--accent); }
+.chip.ok { background: var(--green); color: #08210f; }
+.chip.bad { background: var(--red); }
+.chip.paused { background: var(--orange); color: #221600; }
+.chip.low { background: var(--red); }
+.chip.held { background: var(--green); color: #08210f; }
+
+#round-popover {
+  background: #12121f;
+  padding: 8px 10px;
+}
+#round-popover button { width: 100%; padding: 10px; font-size: 0.9rem; }
+
+#panel {
+  background: var(--card);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* #task-list itself disappears from layout (display:contents) so its heading
+   and task rows become direct flex items of #panel, alongside the two power
+   buttons below — that lets flex-grow ratios compare rows to buttons
+   directly, instead of splitting one shared "task list" share across however
+   many rows exist. */
+#task-list { display: contents; }
+#task-list h3 { flex: none; }
+
+.task-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  background: #2a2a42;
+  border-radius: 12px;
+  padding: 14px 14px;
+  max-width: 100%;
+  flex: 3 1 0;
+}
+/* Expanded row sizes to its own content (heading + action buttons) instead of
+   fighting collapsed rows for an equal share — that equal-share fight is what
+   used to make the opened row's buttons overlap the row below it. */
+.task-row.expanded { flex: none; }
+.task-row.done { opacity: 0.5; }
+.task-row { cursor: pointer; flex-wrap: wrap; }
+.task-row .task-name { flex: 1; min-width: 0; overflow-wrap: break-word; font-size: 2.2rem; font-weight: 600; }
+.task-row .task-dist { color: var(--muted); font-size: 0.85rem; flex: none; }
+.task-actions { display: flex; flex-wrap: wrap; gap: 6px; width: 100%; margin-top: 8px; }
+.task-actions button { flex: 1 1 40%; min-width: 0; min-height: 72px; padding: 10px 4px; font-size: 2rem; background: #34344e; }
+#panel { max-width: 100%; overflow-x: hidden; }
+.task-actions button.loc { background: var(--red); }
+.task-actions button.go { background: var(--green); color: #08210f; }
+.task-actions button.undo { background: var(--orange); color: #221600; }
+
+/* The two power buttons stretch alongside the task list rather than sitting
+   at their minimum size, so the whole panel reads as filled. Ratio to a
+   collapsed task row is 5:3 (a row is ~60% of a button's height). No explicit
+   min-height here deliberately — that used to let the flex-basis:0 shrink the
+   button below its wrapped 2-line text's real height, spilling text into
+   whatever was below it. Leaving min-height unset falls back to the
+   automatic content-based floor (same mechanism that already keeps task rows
+   from clipping), so the button can grow but never shrinks below its text. */
+#btn-callvote, #btn-seelocation { flex: 5 1 0; }
+
+#btn-callvote, #btn-seelocation { font-size: 2.2rem; font-weight: 600; padding: 16px; }
+
+/* Kill button matches the same text scale as tasks/power buttons. */
+#kill-panel button { font-size: 2.2rem; font-weight: 600; min-height: 72px; padding: 16px; }
+
+.banner {
+  border-radius: 10px;
+  padding: 12px;
+  text-align: center;
+  font-weight: 600;
+}
+.banner.dead { background: #3d1220; color: #ffb0bc; }
+.banner.info { background: #12303d; color: #a5e3ff; }
+
+#report-area button { width: 100%; margin-top: 6px; }
+
+/* Report button floats in the map's bottom-left corner, only when in range. */
+#map-wrap { flex: none; position: relative; display: flex; flex-direction: column; min-height: 200px; }
+#report-overlay {
+  position: absolute;
+  bottom: 14px;
+  left: 12px;
+  z-index: 1100;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 60%;
+  align-items: flex-start;
+}
+#report-overlay button {
+  padding: 14px 16px;
+  font-size: 1rem;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.55);
+}
+
+/* Kill button lives at the bottom of the scrollable panel — below the fold, so
+   it isn't visible at a glance and the impostor scrolls down to reach it. */
+#kill-panel:not(:empty) { margin-top: 4px; }
+#kill-panel button { width: 100%; }
+.kill-spacer { height: 40vh; }
+#panel { scroll-behavior: smooth; }
+
+/* Meeting */
+.timer { font-size: 2rem; text-align: center; font-weight: 700; }
+#vote-list { display: flex; flex-direction: column; gap: 8px; }
+#vote-list button { display: flex; justify-content: space-between; background: var(--card); }
+#vote-list button.selected { background: var(--accent); }
+#vote-list button.skip { background: #34344e; }
+
+/* Modal */
+.modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.85);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2000;
+}
+.modal-inner {
+  text-align: center;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: min(90vw, 380px);
+}
+
+/* Role card — 3x the original title/sub/button sizes, but the title ("IMPOSTOR"/
+   "CREWMATE") is one unbreakable word, so a flat 6rem overflows a phone
+   screen with no way to wrap. clamp() caps it to whatever actually fits the
+   viewport width while still hitting 6rem on wider screens. */
+#role-modal-title { font-size: clamp(2.6rem, 15vw, 6rem); line-height: 1.1; overflow-wrap: break-word; }
+#role-modal-sub { font-size: 3rem; line-height: 1.3; }
+#role-modal-ok { font-size: 3.15rem; padding: 42px; }
+
+/* Kill screen — same full-screen treatment as the role card. */
+#kill-modal-title { font-size: clamp(2.2rem, 10vw, 4.5rem); line-height: 1.2; overflow-wrap: break-word; color: #ff4757; }
+#kill-modal-ok { font-size: 3.15rem; padding: 42px; }
+
+/* End-game-early button — pinned to the very bottom-right of the screen,
+   host-only (toggled in app.js), semi-transparent so it doesn't dominate the
+   game UI. Fixed positioning keeps it reachable regardless of panel scroll. */
+#btn-endgame-early {
+  position: fixed;
+  bottom: 16px;
+  right: 16px;
+  z-index: 1600;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  padding: 0;
+  font-size: 1.5rem;
+  line-height: 1;
+  background: rgba(52, 52, 78, 0.85);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+}
+
+/* Solo-test controls */
+.bot-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  background: #2a2a42;
+  border-radius: 10px;
+  padding: 8px 10px;
+  margin-top: 6px;
+}
+.bot-row .bot-name { font-weight: 600; }
+.bot-row .tag { font-size: 0.75rem; color: var(--muted); }
+.bot-row .tag.impostor { color: var(--red); }
+.bot-row button { padding: 6px 10px; font-size: 0.8rem; background: #34344e; }
+.bot-row button.danger { background: var(--red); }
+.bot-row select {
+  background: var(--card);
+  color: var(--text);
+  border: 1px solid #34344e;
+  border-radius: 8px;
+  padding: 6px;
+  font-size: 0.8rem;
+}
+.player-row .bot-remove {
+  margin-left: auto;
+  padding: 2px 10px;
+  font-size: 0.8rem;
+  background: #34344e;
+}
+
+/* In-app camera */
+#camera-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2500;
+  background: #000;
+  display: flex;
+  flex-direction: column;
+}
+#camera-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  background: #12121f;
+}
+#camera-stage {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+  background: #000;
+}
+#camera-video, #camera-photo {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+#camera-video { transform: scaleX(-1); }
+#camera-controls {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 24px;
+  padding: 24px 16px;
+  background: #12121f;
+}
+/* Roughly triple the original button sizes, but clamped to a share of the
+   viewport width so the shutter + flip button + gaps never overflow a real
+   phone screen — #camera-stage is flex:1, so it automatically shrinks to
+   whatever's left once this control bar grows. */
+#camera-shutter {
+  width: clamp(84px, 40vw, 252px);
+  height: clamp(84px, 40vw, 252px);
+  border-radius: 50%;
+  background: #fff;
+  border: 6px solid var(--accent);
+  padding: 0;
+}
+.round, .round-spacer { width: clamp(60px, 26vw, 180px); height: clamp(60px, 26vw, 180px); font-size: clamp(1.8rem, 4vw, 3.5rem); }
+.round { background: #34344e; border-radius: 50%; padding: 0; }
+.round-spacer { visibility: hidden; }
+#camera-review {
+  display: flex;
+  gap: 10px;
+  padding: 0 16px 18px;
+  background: #12121f;
+}
+#camera-review button { flex: 1; }
+
+/* Dialog — box and text sized 2/3 of the prior 4x pass (still bigger than
+   the original) — Explain popup uses this same dialog. Capped to the
+   viewport with its own scrollbar so a long explanation can never overflow
+   off-screen. */
+#dialog .modal-inner {
+  text-align: left;
+  gap: 12px;
+  width: min(64vw, 600px);
+  padding: 21px;
+  max-height: 90dvh;
+  overflow-y: auto;
+}
+#dialog p { font-weight: 600; font-size: 2.8rem; line-height: 1.2; overflow-wrap: break-word; }
+#dialog-body { color: var(--text); font-weight: 400; white-space: pre-wrap; font-size: 2.8rem; line-height: 1.3; overflow-wrap: break-word; }
+/* OK button text matches the explanation's font size. */
+#dialog .join-row button { flex: 1; padding: 20px; font-size: 2.8rem; }
+#dialog-cancel { background: #34344e; }
+
+/* Toast */
+#toast {
+  position: fixed;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--orange);
+  color: #221600;
+  font-weight: 600;
+  padding: 10px 18px;
+  border-radius: 999px;
+  z-index: 3000;
+  max-width: 90vw;
+  text-align: center;
+}
