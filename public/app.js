@@ -615,6 +615,17 @@ function initGameMap() {
     toast('Test location set — you are the blue dot.');
     renderTestPanel('test-panel');
   });
+  // The game map's container sits behind #screen-meeting (display:none) for
+  // the whole meeting, then reappears at full size when play resumes.
+  // Leaflet only reloads tiles for its actual container size when it's told
+  // the size changed — a fixed setTimeout guess at "now it should be visible"
+  // isn't reliable on slower devices where layout/paint can lag behind our
+  // guess. ResizeObserver instead fires exactly when the container's real
+  // pixel size changes, so this fires right when hiding/showing actually
+  // finishes, whatever that takes.
+  if (window.ResizeObserver) {
+    new ResizeObserver(() => gameMap && gameMap.invalidateSize()).observe($('game-map'));
+  }
 }
 
 function initMeetingMap() {
