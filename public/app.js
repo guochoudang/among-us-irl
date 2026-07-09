@@ -16,7 +16,9 @@ let killScreenShownFor = 0; // counter so the kill screen shows once per game st
 let gameCount = 0;
 let voteChoice = null; // meeting: name tapped but not yet confirmed
 let killReadyPrev = false; // was a kill available last tick (for the ready buzz)
+let reportReadyPrev = false; // was a reportable body in range last tick (for the ready buzz)
 let roundBase = null; // { secondsLeft, receivedAt, paused } snapshot from the last server state
+let mapFittedForGame = -1; // counter so the game map's zoom/bounds are (re)fit once per game start, not every state tick
 
 const $ = (id) => document.getElementById(id);
 
@@ -28,6 +30,23 @@ const botMarkers = new Map();
 let seeLocationLayer = null;
 let seeLocationShownUntil = 0; // the reveal's "until" we've already drawn, so we don't re-schedule its clear timer
 
+// Block Location: lobby drawing tool + in-game picking/rendering
+let drawingSegment = false;   // host (lobby) is tracing a new street section
+let draftSegment = [];        // points of the section currently being traced, as [lat,lng] pairs
+let draftSegmentLayer = null;
+let segmentLayer = null;      // lobby-only: saved street sections, editable
+let placingBlock = false;     // impostor: next map tap picks which section to block
+let pickerLayer = null;       // impostor-only: temporary preview lines while choosing
+let activeBlockLayer = null;  // everyone: red highlight for currently-blocked sections
+const announcedBlockIds = new Set(); // block ids whose big popup has already fired
+let inBlockZonePrev = false;  // edge-trigger for the "you're in a blocked-off area" modal
+let blockBannerTimer = null;
+
+// Meeting call spots: lobby drawing tool + read-only markers on the game map
+let addingMeetingLocation = false; // host (lobby): next map tap adds a spot
+const meetingLocLayers = { lobby: null, game: null };
+const lastMeetingLocHash = { lobby: '', game: '' };
+
 // ---------- helpers ----------
 function feetBetween(a, b) {
   const R = 20902231;
@@ -36,6 +55,36 @@ function feetBetween(a, b) {
   const dLng = rad(b.lng - a.lng);
   const h = Math.sin(dLat / 2) ** 2 + Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(dLng / 2) ** 2;
   return 2 * R * Math.asin(Math.sqrt(h));
+}
+
+// Local-flat feet projection, accurate enough at neighborhood scale, used to
+// find the nearest drawn street section to a tap and to check whether a
+// player's GPS fix falls inside a blocked section's line.
+function toLocalFeet(origin, p) {
+  const x = feetBetween(origin, { lat: origin.lat, lng: p.lng }) * (p.lng < origin.lng ? -1 : 1);
+  const y = feetBetween(origin, { lat: p.lat, lng: origin.lng }) * (p.lat < origin.lat ? -1 : 1);
+  return { x, y };
+}
+function pointToSegmentFeet(p, a, b) {
+  const abx = b.x - a.x, aby = b.y - a.y;
+  const apx = p.x - a.x, apy = p.y - a.y;
+  const lenSq = abx * abx + aby * aby;
+  let t = lenSq > 0 ? (apx * abx + apy * aby) / lenSq : 0;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(p.x - (a.x + t * abx), p.y - (a.y + t * aby));
+}
+function distanceToPolylineFeet(point, points) {
+  if (!points || !points.length) return Infinity;
+  const origin = points[0];
+  const p = toLocalFeet(origin, point);
+  if (points.length === 1) return Math.hypot(p.x, p.y);
+  let min = Infinity;
+  for (let i = 0; i < points.length - 1; i++) {
+    const a = toLocalFeet(origin, points[i]);
+    const b = toLocalFeet(origin, points[i + 1]);
+    min = Math.min(min, pointToSegmentFeet(p, a, b));
+  }
+  return min;
 }
 
 // In-app replacements for prompt()/confirm(): those built-in popups are
@@ -176,6 +225,14 @@ let taskLayer = null;
 let lobbyLayer = null;
 let lastTaskHash = '';
 
+// Meeting-screen reference map: hidden by default, toggled on with a button.
+// Read-only (no click handlers) — just a bigger view of already-public info
+// (area, tasks, street sections, meeting spots, any still-active closures)
+// so players can talk through where things are without leaving the vote.
+let meetingMap = null;
+let meetingMapLayer = null;
+let meetingMapShown = false;
+
 // Play-area drawing (host, lobby) and display (everyone)
 let drawingArea = false;
 let draftArea = [];
@@ -242,11 +299,27 @@ function initLobbyMap() {
   defaultView(lobbyMap);
   tiles().addTo(lobbyMap);
   lobbyLayer = L.layerGroup().addTo(lobbyMap);
+  segmentLayer = L.layerGroup().addTo(lobbyMap);
+  meetingLocLayers.lobby = L.layerGroup().addTo(lobbyMap);
   lobbyMap.on('click', async (e) => {
     if (drawingArea) {
       draftArea.push([e.latlng.lat, e.latlng.lng]);
       updateDraft();
       setDrawButtons();
+      return;
+    }
+    if (drawingSegment) {
+      draftSegment.push([e.latlng.lat, e.latlng.lng]);
+      updateSegmentDraft();
+      setSegmentDrawButtons();
+      return;
+    }
+    if (addingMeetingLocation) {
+      const name = await askText('Name this meeting spot:');
+      if (!name) return;
+      const locations = state.meetingLocations.map((m) => ({ name: m.name, lat: m.lat, lng: m.lng }));
+      locations.push({ name, lat: e.latlng.lat, lng: e.latlng.lng });
+      socket.emit('setMeetingLocations', locations);
       return;
     }
     const name = await askText('Name this task:');
@@ -266,7 +339,8 @@ function renderLobbyTasks() {
     const m = L.circleMarker([t.lat, t.lng], {
       radius: 5, color: '#fff', weight: 1.5, fillColor: '#4e6cff', fillOpacity: 1,
     }).addTo(lobbyLayer).bindTooltip(t.name);
-    m.on('click', async () => {
+    m.on('click', async (e) => {
+      L.DomEvent.stopPropagation(e);
       if (!(await askYesNo(`Remove task "${t.name}"?`))) return;
       const tasks = state.tasks.filter((x) => x.id !== t.id).map((x) => ({ name: x.name, lat: x.lat, lng: x.lng, explanation: x.explanation, photo: x.photo }));
       socket.emit('setTasks', tasks);
@@ -275,27 +349,191 @@ function renderLobbyTasks() {
   $('task-count').textContent = state.tasks.length;
 }
 
+function renderStreetSegments() {
+  if (!lobbyMap) return;
+  segmentLayer.clearLayers();
+  for (const seg of state.streetSegments) {
+    const line = L.polyline(seg.points.map((p) => [p.lat, p.lng]), {
+      color: '#ffa502', weight: 4, opacity: 0.9,
+    }).addTo(segmentLayer).bindTooltip(seg.name);
+    line.on('click', async (e) => {
+      L.DomEvent.stopPropagation(e);
+      if (!(await askYesNo(`Remove street section "${seg.name}"?`))) return;
+      const segments = state.streetSegments.filter((s) => s.id !== seg.id).map((s) => ({ name: s.name, points: s.points }));
+      socket.emit('setStreetSegments', segments);
+    });
+  }
+  $('segment-count').textContent = state.streetSegments.length;
+}
+
+// Shared between the lobby map (editable, host-only) and the game map
+// (read-only, everyone) so crew can see where they're allowed to call a
+// meeting from. `which` keys the per-map layer/hash like renderArea does.
+function renderMeetingLocations(map, which) {
+  if (!map) return;
+  const locs = state.meetingLocations || [];
+  const hash = JSON.stringify(locs);
+  if (lastMeetingLocHash[which] === hash) return;
+  lastMeetingLocHash[which] = hash;
+  if (!meetingLocLayers[which]) meetingLocLayers[which] = L.layerGroup().addTo(map);
+  meetingLocLayers[which].clearLayers();
+  for (const m of locs) {
+    const dot = L.circleMarker([m.lat, m.lng], {
+      radius: 7, color: '#fff', weight: 1.5, fillColor: '#a55eea', fillOpacity: 1,
+    }).addTo(meetingLocLayers[which]).bindTooltip(m.name);
+    if (which === 'lobby') {
+      dot.on('click', async (e) => {
+        L.DomEvent.stopPropagation(e);
+        if (!(await askYesNo(`Remove meeting spot "${m.name}"?`))) return;
+        const locations = locs.filter((x) => x.id !== m.id).map((x) => ({ name: x.name, lat: x.lat, lng: x.lng }));
+        socket.emit('setMeetingLocations', locations);
+      });
+    }
+  }
+  $('meetingloc-count') && ($('meetingloc-count').textContent = locs.length);
+}
+
+function updateSegmentDraft() {
+  if (draftSegmentLayer) {
+    lobbyMap.removeLayer(draftSegmentLayer);
+    draftSegmentLayer = null;
+  }
+  if (!draftSegment.length) return;
+  draftSegmentLayer = L.layerGroup().addTo(lobbyMap);
+  draftSegment.forEach((pt, i) => {
+    const dot = L.circleMarker(pt, {
+      radius: 7, color: '#fff', weight: 2, fillColor: '#ffa502', fillOpacity: 1,
+    }).addTo(draftSegmentLayer).bindTooltip('Tap to remove this point');
+    dot.on('click', (e) => {
+      L.DomEvent.stopPropagation(e);
+      draftSegment.splice(i, 1);
+      updateSegmentDraft();
+      setSegmentDrawButtons();
+    });
+  });
+  if (draftSegment.length >= 2) {
+    L.polyline(draftSegment, { color: '#ffa502', weight: 3, dashArray: '6 6' }).addTo(draftSegmentLayer);
+  }
+}
+
+function setSegmentDrawButtons() {
+  $('btn-segment-draw').textContent = drawingSegment ? `Points: ${draftSegment.length} (tap map)` : '✏️ Draw: tap points';
+  $('btn-segment-save').classList.toggle('hidden', !drawingSegment);
+}
+
+// The server only recomputes/broadcasts activeBlocks when something else
+// happens (a pos update, a kill, etc.) — on an otherwise quiet stretch, a
+// block's real-world endsAt can pass with no broadcast to tell the client.
+// Filtering by time locally (same idea as the round timer's local ticking)
+// means the red highlight and the nudge below never outlive the real window.
+function liveBlocks() {
+  // During a meeting, a block's remaining time is frozen server-side (see
+  // blockEffectiveEndsAt in server.js) — the endsAt we're holding is only a
+  // snapshot from the last broadcast, and nothing else necessarily triggers
+  // another one while everyone's just voting. Decaying it locally against
+  // Date.now() would make it look expired well before the server actually
+  // considers it so, so trust the server's list as-is until play resumes.
+  if (state.phase === 'meeting') return state.activeBlocks || [];
+  return (state.activeBlocks || []).filter((b) => b.endsAt > Date.now());
+}
+
+// Red highlight on the game map for every currently-active block, visible to
+// everyone. Small list, cheap to just clear and redraw each tick.
+function renderActiveBlocks() {
+  if (!gameMap) return;
+  if (!activeBlockLayer) activeBlockLayer = L.layerGroup().addTo(gameMap);
+  activeBlockLayer.clearLayers();
+  for (const b of liveBlocks()) {
+    L.polyline(b.points.map((p) => [p.lat, p.lng]), {
+      color: '#ff4757', weight: 6, opacity: 0.9,
+    }).addTo(activeBlockLayer).bindTooltip(b.name);
+  }
+}
+
+// Impostor-only preview while choosing what to block: every drawn section,
+// dimmed if this impostor already used it (can't pick it again this game).
+function renderBlockPicker() {
+  if (!gameMap) return;
+  if (pickerLayer) { gameMap.removeLayer(pickerLayer); pickerLayer = null; }
+  if (!placingBlock) return;
+  pickerLayer = L.layerGroup().addTo(gameMap);
+  const used = new Set((state.you.usedSegments || []));
+  for (const seg of (state.streetSegments || [])) {
+    const isUsed = used.has(seg.id);
+    L.polyline(seg.points.map((p) => [p.lat, p.lng]), {
+      color: isUsed ? '#666' : '#ffa502', weight: 5, dashArray: '8 6', opacity: 0.9,
+    }).addTo(pickerLayer).bindTooltip(seg.name + (isUsed ? ' (already used)' : ''));
+  }
+}
+
+function findNearestSegment(tapPoint, maxFeet = 60) {
+  let best = null;
+  let bestDist = Infinity;
+  for (const seg of (state.streetSegments || [])) {
+    const d = distanceToPolylineFeet(tapPoint, seg.points);
+    if (d < bestDist) { bestDist = d; best = seg; }
+  }
+  return bestDist <= maxFeet ? best : null;
+}
+
+function showBlockBanner(b) {
+  clearTimeout(blockBannerTimer);
+  $('block-banner-name').textContent = b.name;
+  const secsLeft = Math.max(0, Math.ceil((b.endsAt - Date.now()) / 1000));
+  $('block-banner-sub').textContent = `for ${fmt(secsLeft)}`;
+  $('block-banner').classList.remove('hidden');
+  if (navigator.vibrate) navigator.vibrate([200, 100, 200, 100, 200]);
+  blockBannerTimer = setTimeout(() => $('block-banner').classList.add('hidden'), 6000);
+}
+
+// Keeps the map's furthest-zoomed-out view pinned to the play area (the
+// "fixed borders" the host already knows), while still letting a player zoom
+// in and pan around inside them. Called right after defaultView() so the
+// zoom level fitBounds just landed on becomes the floor you can't zoom past,
+// and dragging/pinching past the area edge snaps back instead of scrolling away.
+function lockMapBounds(map) {
+  if (!state || !state.area || state.area.length < 3) return;
+  const bounds = L.latLngBounds(state.area.map((p) => [p.lat, p.lng])).pad(0.03);
+  map.setMaxBounds(bounds);
+  map.setMinZoom(map.getZoom());
+}
+
 function initGameMap() {
   if (gameMap) return;
-  // Static map: framed once on the play area and never pannable/zoomable, so a
-  // scroll gesture that starts over the map scrolls the page instead — and the
-  // impostor can always reach the kill button below without a stray map drag.
+  // The map fills exactly the top half of the screen (see .map.grow in
+  // style.css) and the task/kill panel below it scrolls independently, so
+  // dragging/zooming the map doesn't fight with reaching buttons below it.
   gameMap = L.map('game-map', {
-    zoomControl: false,
-    dragging: false,
-    touchZoom: false,
-    scrollWheelZoom: false,
-    doubleClickZoom: false,
+    zoomControl: true,
+    dragging: true,
+    touchZoom: true,
+    scrollWheelZoom: true,
+    doubleClickZoom: true,
     boxZoom: false,
     keyboard: false,
-    tap: false,
+    maxBoundsViscosity: 1.0,
   });
   defaultView(gameMap);
+  lockMapBounds(gameMap);
   tiles().addTo(gameMap);
   taskLayer = L.layerGroup().addTo(gameMap);
   botLayer = L.layerGroup().addTo(gameMap);
   seeLocationLayer = L.layerGroup().addTo(gameMap);
-  gameMap.on('click', (e) => {
+  gameMap.on('click', async (e) => {
+    if (placingBlock) {
+      const tap = { lat: e.latlng.lat, lng: e.latlng.lng };
+      const seg = findNearestSegment(tap);
+      if (!seg) return toast('Tap closer to one of the drawn (orange) street sections.');
+      if ((state.you.usedSegments || []).includes(seg.id)) {
+        return toast(`You've already blocked "${seg.name}" this game — pick a different section.`);
+      }
+      if (await askYesNo(`Block "${seg.name}" for ${fmt(state.settings.blockDuration)}?`)) {
+        socket.emit('blockLocation', { segmentId: seg.id });
+      }
+      placingBlock = false;
+      renderBlockPicker();
+      return;
+    }
     if (!placingMe) return;
     placingMe = false;
     fakeMode = true;
@@ -305,6 +543,46 @@ function initGameMap() {
     toast('Test location set — you are the blue dot.');
     renderTestPanel('test-panel');
   });
+}
+
+function initMeetingMap() {
+  if (meetingMap) return;
+  meetingMap = L.map('meeting-map', {
+    zoomControl: true, dragging: true, touchZoom: true, scrollWheelZoom: true,
+    doubleClickZoom: true, boxZoom: false, keyboard: false, maxBoundsViscosity: 1.0,
+  });
+  defaultView(meetingMap);
+  lockMapBounds(meetingMap);
+  tiles().addTo(meetingMap);
+  meetingMapLayer = L.layerGroup().addTo(meetingMap);
+}
+
+// Redraws everything on the meeting map from scratch. Only ever called while
+// the map is actually visible, so there's no incremental-diff cost to worry
+// about like the game map's renderGameTasks has.
+function renderMeetingMapContents() {
+  if (!meetingMap || !state) return;
+  meetingMapLayer.clearLayers();
+  for (const t of state.tasks || []) {
+    if (t.anywhere) continue; // wild-card tasks have no fixed spot
+    L.circleMarker([t.lat, t.lng], {
+      radius: 4, color: '#fff', weight: 1, fillColor: '#777790', fillOpacity: 0.95,
+    }).addTo(meetingMapLayer).bindTooltip(t.name);
+  }
+  // Street sections themselves are deliberately NOT drawn here — only actual
+  // active closures (red, below) should ever show. Drawing every configured
+  // section in orange would reveal the full set of blockable streets to
+  // everyone during every meeting, which isn't otherwise public information.
+  for (const m of state.meetingLocations || []) {
+    L.circleMarker([m.lat, m.lng], {
+      radius: 7, color: '#fff', weight: 1.5, fillColor: '#a55eea', fillOpacity: 1,
+    }).addTo(meetingMapLayer).bindTooltip(m.name);
+  }
+  for (const b of liveBlocks()) {
+    L.polyline(b.points.map((p) => [p.lat, p.lng]), {
+      color: '#ff4757', weight: 6, opacity: 0.9,
+    }).addTo(meetingMapLayer).bindTooltip(`🚫 ${b.name}`);
+  }
 }
 
 // "See Location" reveal: private to this player, drawn once per use and
@@ -417,6 +695,17 @@ function renderTestPanel(containerId) {
         kill.onclick = act('kill');
         row.append(kill);
       }
+      if (b.alive && b.role === 'impostor' && Date.now() >= (b.blockCooldownUntil || 0)) {
+        const available = (state.streetSegments || []).filter((s) => !(b.usedSegments || []).includes(s.id));
+        if (available.length) {
+          const blk = document.createElement('button');
+          blk.className = 'danger';
+          blk.textContent = '🚫 Block random section';
+          const pick = available[Math.floor(Math.random() * available.length)];
+          blk.onclick = act('blockLocation', pick.id);
+          row.append(blk);
+        }
+      }
       if (b.alive) {
         const rep = document.createElement('button');
         rep.textContent = 'Report body';
@@ -500,6 +789,10 @@ const SETTINGS_META = [
   ['tasksPerPlayer', 'Tasks per player'],
   ['roundLength', 'Round time limit (seconds)'],
   ['staleAfter', 'GPS offline after (seconds)'],
+  ['blockDuration', 'Block Location duration (seconds)'],
+  ['blockCooldown', 'Block Location cooldown after (seconds)'],
+  ['meetingCallRange', 'Emergency meeting call range (feet)'],
+  ['ghostChatCooldown', 'Ghost hint cooldown (seconds)'],
 ];
 let settingsBuilt = false;
 
@@ -547,6 +840,8 @@ function fillSettingsForm() {
   }
   const autoStartBox = $('set-timerAutoStart');
   if (autoStartBox && document.activeElement !== autoStartBox) autoStartBox.checked = state.settings.timerAutoStart;
+  const ghostRolesBox = $('set-ghostRolesEnabled');
+  if (ghostRolesBox && document.activeElement !== ghostRolesBox) ghostRolesBox.checked = state.settings.ghostRolesEnabled;
 }
 
 // ---------- main render ----------
@@ -637,9 +932,13 @@ function renderLobby() {
     initLobbyMap();
     setTimeout(() => lobbyMap && lobbyMap.invalidateSize(), 50);
     renderLobbyTasks();
+    renderStreetSegments();
+    renderMeetingLocations(lobbyMap, 'lobby');
     renderArea(lobbyMap, 'lobby');
     $('area-pill').textContent = (state.area || []).length >= 3 ? 'set ✓' : 'none';
     setDrawButtons();
+    setSegmentDrawButtons();
+    $('btn-meetingloc-add').textContent = addingMeetingLocation ? 'Adding… (tap map)' : '📍 Add spot: tap map';
   }
 }
 
@@ -647,10 +946,22 @@ function renderGame() {
   showScreen('game');
   keepAwake();
   initGameMap();
-  setTimeout(() => { if (gameMap) { gameMap.invalidateSize(); defaultView(gameMap); } }, 50);
+  // Only re-fit the view once per new game (not on every state tick) — now
+  // that the map can be zoomed/panned, refitting on every broadcast would
+  // keep yanking a player's view back while they're looking around.
+  if (mapFittedForGame !== gameCount) {
+    mapFittedForGame = gameCount;
+    setTimeout(() => {
+      if (!gameMap) return;
+      gameMap.invalidateSize();
+      defaultView(gameMap);
+      lockMapBounds(gameMap);
+    }, 50);
+  }
   updateMeMarker();
   renderGameTasks();
   renderArea(gameMap, 'game');
+  renderMeetingLocations(gameMap, 'game');
 
   const you = state.you;
 
@@ -680,15 +991,23 @@ function renderGame() {
   $('progress-chip').textContent = `Tasks ${state.taskProgress.done}/${state.taskProgress.total}`;
 
   // Both buttons vanish entirely (not just disabled) once used, or if dead.
-  const canCallMeeting = you.alive && !you.calledMeeting && state.phase === 'playing';
+  const canCallMeeting = you.alive && !you.calledMeeting && state.phase === 'playing' && you.nearMeetingLocation;
   $('btn-callvote').classList.toggle('hidden', !canCallMeeting);
   const canSeeLocation = you.alive && you.role !== 'impostor' && !you.usedSeeLocation && state.phase === 'playing';
   $('btn-seelocation').classList.toggle('hidden', !canSeeLocation);
+  // Block Location sits in the same slot for the impostor instead — unlike
+  // See Location it's repeatable, so it only fully disappears when dead/the
+  // round ends; while on cooldown it stays visible but shows a countdown
+  // (handled live in renderDynamic, since that ticks every 500ms).
+  const canBlockLocation = you.alive && you.role === 'impostor' && state.phase === 'playing';
+  $('btn-blocklocation').classList.toggle('hidden', !canBlockLocation);
+  if (!canBlockLocation && placingBlock) { placingBlock = false; renderBlockPicker(); }
 
   renderBots();
   renderSeeLocationReveal();
   renderTestPanel('test-panel');
   renderDeadArea();
+  renderGhostInbox('ghost-log-game');
   renderTaskList();
   renderDynamic(); // report + kill corners, gps chip, countdowns
 }
@@ -711,6 +1030,98 @@ function renderDeadArea() {
     div.textContent = 'You are DEAD. Stay where you are and stay quiet. Your tasks were shared with the crew.';
   }
   area.append(div);
+  if (you.foundDead && you.ghostRole) renderGhostComposer(area);
+}
+
+// Troll/Helper hint composer: the only "chat" a ghost has, and it's not free
+// text — the wording is fixed, the player only fills in a location and picks
+// exactly one living player to DM it to (never a broadcast). One send at a
+// time, then a cooldown (see renderDynamic for the live countdown).
+function renderGhostComposer(container) {
+  const wrap = document.createElement('div');
+  wrap.className = 'ghost-composer';
+  const label = document.createElement('p');
+  label.className = 'hint';
+  label.textContent = 'Send a private hint to one living player — you can only fill in who and the location:';
+  wrap.append(label);
+
+  const targetRow = document.createElement('div');
+  targetRow.className = 'ghost-input-row';
+  const targetLabel = document.createElement('span');
+  targetLabel.textContent = 'Send to:';
+  const select = document.createElement('select');
+  select.id = 'ghost-hint-target';
+  const living = (state.players || []).filter((p) => !p.dead && p.key !== state.you.key);
+  for (const p of living) {
+    const opt = document.createElement('option');
+    opt.value = p.key;
+    opt.textContent = p.name;
+    select.append(opt);
+  }
+  targetRow.append(targetLabel, select);
+  wrap.append(targetRow);
+
+  const row = document.createElement('div');
+  row.className = 'ghost-input-row';
+  const prefix = document.createElement('span');
+  prefix.textContent = 'The imposter is headed toward:';
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.id = 'ghost-hint-input';
+  input.maxLength = 60;
+  input.placeholder = 'e.g. the park';
+  const sendBtn = document.createElement('button');
+  sendBtn.className = 'small';
+  sendBtn.id = 'ghost-hint-send';
+  sendBtn.textContent = 'Send';
+  sendBtn.onclick = () => {
+    if (!living.length) return toast('No living players to send to right now.');
+    const loc = input.value.trim();
+    if (!loc) return toast('Type a location first.');
+    socket.emit('ghostHint', { location: loc, targetKey: select.value });
+    input.value = '';
+  };
+  row.append(prefix, input, sendBtn);
+  wrap.append(row);
+  container.append(wrap);
+}
+
+// Private inbox of ghost hints sent TO this player, shown only on the regular
+// game screen — never during a meeting. Sender name shown (they're already
+// publicly dead), never their Troll/Helper alignment.
+function renderGhostInbox(containerId) {
+  const el = $(containerId);
+  if (!el || !state) return;
+  const msgs = state.you.ghostInbox || [];
+  el.innerHTML = '';
+  if (!msgs.length) return;
+  el.className = 'ghost-log';
+  const h = document.createElement('h3');
+  h.textContent = '👻 A ghost hint, just for you';
+  el.append(h);
+  for (const m of msgs.slice(-5).reverse()) {
+    const row = document.createElement('div');
+    row.className = 'ghost-log-row';
+    row.textContent = `${m.senderName}: The imposter is headed toward ${m.location}`;
+    el.append(row);
+  }
+}
+
+// Backup text chat for the living during a meeting, in case the voice call
+// drops. Everyone present can read it (dead players can watch, like the vote
+// list), but only living players get the input box. Never carries over
+// between meetings — the server clears it the instant a new one starts.
+function renderMeetingChat() {
+  const log = $('meeting-chat-log');
+  log.innerHTML = '';
+  for (const m of (state.meetingChat || [])) {
+    const row = document.createElement('div');
+    row.className = 'meeting-chat-row';
+    row.textContent = `${m.senderName}: ${m.text}`;
+    log.append(row);
+  }
+  log.scrollTop = log.scrollHeight;
+  $('meeting-chat-compose').classList.toggle('hidden', !state.you.alive);
 }
 
 // Report button lives in the bottom-left corner of the map; it's rebuilt from
@@ -718,6 +1129,10 @@ function renderDeadArea() {
 function renderReportOverlay(online) {
   const overlay = $('report-overlay');
   const bodies = (online && state && state.you.alive && state.phase === 'playing') ? (state.nearbyBodies || []) : [];
+  // Buzz the moment a reportable body comes into range, same as the kill button.
+  const reportReady = bodies.length > 0;
+  if (reportReady && !reportReadyPrev && navigator.vibrate) navigator.vibrate([60, 40, 60]);
+  reportReadyPrev = reportReady;
   const key = bodies.map((b) => b.key).join(',');
   if (overlay.dataset.key === key) return;
   overlay.dataset.key = key;
@@ -1045,21 +1460,88 @@ function renderDynamic() {
     }
   }
 
+  // Block Location button: unlike kill/report it's fine to show its own
+  // cooldown countdown — it's a repeatable ability only the impostor ever
+  // sees, there's no bystander-glancing-at-the-phone concern like with kill.
+  const blockBtn = $('btn-blocklocation');
+  if (!blockBtn.classList.contains('hidden')) {
+    const blockReady = online && Date.now() >= (you.blockCooldownUntil || 0);
+    blockBtn.disabled = !blockReady;
+    blockBtn.textContent = blockReady
+      ? '🚫 Block Location'
+      : `🚫 Block Location (${fmt(Math.max(0, Math.ceil((you.blockCooldownUntil - Date.now()) / 1000)))})`;
+  }
+
+  // Ghost hint send button: same live-countdown treatment as Block Location.
+  const ghostSendBtn = $('ghost-hint-send');
+  if (ghostSendBtn) {
+    const ghostReady = online && Date.now() >= (you.ghostChatCooldownUntil || 0);
+    ghostSendBtn.disabled = !ghostReady;
+    const ghostInput = $('ghost-hint-input');
+    if (ghostInput) ghostInput.disabled = !ghostReady;
+    ghostSendBtn.textContent = ghostReady
+      ? 'Send'
+      : `Wait (${fmt(Math.max(0, Math.ceil((you.ghostChatCooldownUntil - Date.now()) / 1000)))})`;
+  }
+
+  // Active road closures: red highlight for everyone, plus a big popup the
+  // instant a new one appears (once per block, tracked by its id).
+  renderActiveBlocks();
+  for (const b of (state.activeBlocks || [])) {
+    if (!announcedBlockIds.has(b.id)) {
+      announcedBlockIds.add(b.id);
+      showBlockBanner(b);
+    }
+  }
+
+  // Fairness heads-up for everyone but the impostor who set it: there's no
+  // way to actually stop a player from walking through a blocked section, so
+  // this is just an honest notice. Edge-triggered so it only pops up once on
+  // entry (not every tick while standing in the zone), and requires tapping
+  // "I understand" rather than fading on its own like the public banner does.
+  if (you.role !== 'impostor' && myPos) {
+    const zonesHere = liveBlocks().filter((b) => distanceToPolylineFeet(myPos, b.points) <= 40);
+    const inZone = zonesHere.length > 0;
+    if (inZone && !inBlockZonePrev) {
+      $('redzone-modal-sub').textContent = zonesHere.map((b) => b.name).join(', ');
+      $('redzone-modal').classList.remove('hidden');
+    }
+    inBlockZonePrev = inZone;
+  } else {
+    inBlockZonePrev = false;
+  }
+
   // meeting countdown
   if (state.phase === 'meeting' && state.meeting) {
     const left = Math.max(0, Math.ceil((state.meeting.endsAt - Date.now()) / 1000));
     $('meeting-timer').textContent = fmt(left);
   }
+
+  // Keep the meeting map's active-closure highlights accurate in real time
+  // (same reasoning as liveBlocks() elsewhere: a closure can expire between
+  // server broadcasts).
+  if (state.phase === 'meeting' && meetingMapShown && meetingMap) {
+    renderMeetingMapContents();
+  }
 }
 setInterval(renderDynamic, 500);
 
+let lastMeetingKey = null; // resets the map toggle back to hidden for each new meeting
 function renderMeeting() {
   showScreen('meeting');
   const m = state.meeting;
   if (!m) return;
+  const meetingKey = `${m.reporterName}|${m.victimName}|${m.endsAt}`;
+  if (meetingKey !== lastMeetingKey) {
+    lastMeetingKey = meetingKey;
+    meetingMapShown = false;
+    $('meeting-map').classList.add('hidden');
+    $('btn-meeting-map-toggle').textContent = '🗺️ Show Map';
+  }
   $('meeting-info').textContent = m.victimName
     ? `${m.reporterName} reported ${m.victimName}'s body.`
     : `${m.reporterName} called an emergency vote.`;
+  renderMeetingChat();
 
   const you = state.you;
   const list = $('vote-list');
@@ -1100,6 +1582,9 @@ function renderMeeting() {
     : m.yourVote !== null
       ? 'Vote cast. Waiting for the others…'
       : '';
+  const ghostComposerMeeting = $('ghost-composer-meeting');
+  ghostComposerMeeting.innerHTML = '';
+  if (!you.alive && you.foundDead && you.ghostRole) renderGhostComposer(ghostComposerMeeting);
   renderTestPanel('meeting-test');
   renderDynamic();
 }
@@ -1140,6 +1625,7 @@ socket.on('state', (s) => {
 $('btn-start').onclick = () => socket.emit('start');
 $('btn-addbot').onclick = () => socket.emit('addBot');
 $('set-timerAutoStart').onchange = (e) => socket.emit('settings', { timerAutoStart: e.target.checked });
+$('set-ghostRolesEnabled').onchange = (e) => socket.emit('settings', { ghostRolesEnabled: e.target.checked });
 
 $('round-chip').onclick = () => {
   if (!state || !state.isHost) return;
@@ -1182,6 +1668,31 @@ $('btn-area-clear').onclick = () => {
   setDrawButtons();
   socket.emit('setArea', []);
 };
+$('btn-segment-draw').onclick = () => {
+  if (drawingSegment) return;
+  drawingSegment = true;
+  draftSegment = [];
+  updateSegmentDraft();
+  setSegmentDrawButtons();
+  toast('Tap the map along the street, then press Finish.');
+};
+$('btn-segment-save').onclick = async () => {
+  if (draftSegment.length < 2) return toast('Tap at least 2 points on the map first.');
+  const name = await askText('Name this street section:');
+  if (!name) return;
+  const segments = state.streetSegments.map((s) => ({ name: s.name, points: s.points }));
+  segments.push({ name, points: draftSegment.map(([lat, lng]) => ({ lat, lng })) });
+  socket.emit('setStreetSegments', segments);
+  drawingSegment = false;
+  draftSegment = [];
+  updateSegmentDraft();
+  setSegmentDrawButtons();
+};
+$('btn-meetingloc-add').onclick = () => {
+  addingMeetingLocation = !addingMeetingLocation;
+  $('btn-meetingloc-add').textContent = addingMeetingLocation ? 'Adding… (tap map)' : '📍 Add spot: tap map';
+  if (addingMeetingLocation) toast('Tap the map to add a meeting spot. Tap the button again to stop.');
+};
 $('btn-again').onclick = () => socket.emit('again');
 $('btn-endgame-early').onclick = async () => {
   if (await askYesNo('Are you sure you want to end this game early?')) socket.emit('endEarly');
@@ -1192,11 +1703,64 @@ $('btn-callvote').onclick = async () => {
 $('btn-seelocation').onclick = async () => {
   if (await askYesNo('This is your ONE See Location use for the whole game. Reveal some players\' locations now?')) socket.emit('seeLocation');
 };
+$('btn-blocklocation').onclick = () => {
+  if ($('btn-blocklocation').disabled) return;
+  placingBlock = !placingBlock;
+  renderBlockPicker();
+  if (placingBlock) toast('Tap a drawn (orange) street section on the map to block it.');
+};
 $('role-modal-ok').onclick = () => $('role-modal').classList.add('hidden');
-$('kill-modal-ok').onclick = () => $('kill-modal').classList.add('hidden');
+// The ghost-role card appears right after the kill screen is dismissed
+// (never stacked on top of it), once per game — ghostRole is set server-side
+// in the same instant as the kill, so it's already there by the time the
+// kill screen first shows.
+let ghostRoleShownFor = 0;
+$('kill-modal-ok').onclick = () => {
+  $('kill-modal').classList.add('hidden');
+  if (state && state.you.ghostRole && ghostRoleShownFor !== gameCount) {
+    ghostRoleShownFor = gameCount;
+    const isTroll = state.you.ghostRole === 'troll';
+    $('ghost-modal-title').textContent = isTroll ? "You're now a 😈 TROLL ghost!" : "You're now a 👼 HELPER ghost!";
+    $('ghost-modal-title').style.color = isTroll ? '#ff4757' : '#4e6cff';
+    $('ghost-modal-sub').textContent = isTroll
+      ? 'Once your body is found, you can send one fixed-wording hint at a time — and it doesn\'t have to be true. Have fun misleading the living!'
+      : 'Once your body is found, you can send one fixed-wording hint at a time to nudge the living crew toward the truth.';
+    $('ghost-modal').classList.remove('hidden');
+  }
+};
+$('redzone-modal-ok').onclick = () => $('redzone-modal').classList.add('hidden');
+$('ghost-modal-ok').onclick = () => $('ghost-modal').classList.add('hidden');
+$('block-banner').onclick = () => {
+  clearTimeout(blockBannerTimer);
+  $('block-banner').classList.add('hidden');
+};
 $('btn-confirm-vote').onclick = () => {
   if (voteChoice === null) return;
   socket.emit('vote', { target: voteChoice });
+};
+$('meeting-chat-send').onclick = () => {
+  const input = $('meeting-chat-input');
+  const text = input.value.trim();
+  if (!text) return;
+  socket.emit('meetingChat', { text });
+  input.value = '';
+};
+$('meeting-chat-input').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') $('meeting-chat-send').click();
+});
+$('btn-meeting-map-toggle').onclick = () => {
+  meetingMapShown = !meetingMapShown;
+  $('meeting-map').classList.toggle('hidden', !meetingMapShown);
+  $('btn-meeting-map-toggle').textContent = meetingMapShown ? '🗺️ Hide Map' : '🗺️ Show Map';
+  if (meetingMapShown) {
+    initMeetingMap();
+    setTimeout(() => {
+      meetingMap.invalidateSize();
+      defaultView(meetingMap);
+      renderArea(meetingMap, 'meeting');
+      renderMeetingMapContents();
+    }, 50);
+  }
 };
 $('dialog-ok').onclick = () => closeDialog(true);
 $('dialog-cancel').onclick = () => closeDialog(false);

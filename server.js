@@ -25,6 +25,11 @@ const DEFAULT_SETTINGS = {
   roundLength: 1500,  // active-play seconds before the impostor auto-wins (pauses in meetings); 25 min default
   staleAfter: 15,     // no GPS ping for this long = phone counts as offline for kills/reports
   timerAutoStart: true, // if false, the round clock starts paused until the host manually releases it
+  blockDuration: 120, // how long a "Block Location" street closure lasts
+  blockCooldown: 180, // wait after a block ends before the same impostor can use it again
+  meetingCallRange: 100, // how close to a meeting-call spot you must be to call an emergency meeting
+  ghostChatCooldown: 60, // wait between ghost hint messages (Troll/Helper), per player
+  ghostRolesEnabled: true, // Troll/Helper ghost roles + their private hint DMs, as one package
 };
 
 const SETTING_LIMITS = {
@@ -36,6 +41,10 @@ const SETTING_LIMITS = {
   tasksPerPlayer: [1, 20],
   roundLength: [process.env.TEST_MODE ? 5 : 120, 3600], // 120s floor keeps real games sane; test hook only
   staleAfter: [5, 120],
+  blockDuration: [10, 600],
+  blockCooldown: [10, 600],
+  meetingCallRange: [10, 500],
+  ghostChatCooldown: [10, 300],
 };
 
 // tasksPerPlayer + round length scale with how many people are in the game.
@@ -124,6 +133,67 @@ const DEFAULT_AREA = [
   { lat: 37.30596, lng: -122.05809 },
   { lat: 37.30594, lng: -122.05680 }, // closes at the Santa Teresa corner
 ];
+
+// Street sections every new game starts with, for the impostor's "Block
+// Location" ability (each is a named polyline of lat/lng points). Drawn by
+// the host in the lobby's "Street sections" tool. The host can still
+// add/remove more per-room on top of these.
+const DEFAULT_STREET_SEGMENTS = [
+  {
+    name: 'Northern Santa Teresa',
+    points: [
+      { lat: 37.31150723180763, lng: -122.05643087630962 },
+      { lat: 37.31044910773156, lng: -122.05640405421947 },
+      { lat: 37.310225107781285, lng: -122.05642551189159 },
+      { lat: 37.3094955033162, lng: -122.05662131314969 },
+      { lat: 37.30905531941484, lng: -122.05660164367148 },
+      { lat: 37.30910225352324, lng: -122.05670356761404 },
+      { lat: 37.30952465918059, lng: -122.05673038970419 },
+      { lat: 37.310249996692164, lng: -122.05653727065511 },
+      { lat: 37.310450529945925, lng: -122.05652654181905 },
+      { lat: 37.31152572039698, lng: -122.05653727065511 },
+      { lat: 37.311491587603115, lng: -122.05637633811422 },
+    ],
+  },
+  {
+    name: 'Southern Santa Teresa',
+    points: [
+      { lat: 37.3082161895126, lng: -122.05674737697338 },
+      { lat: 37.30601449566175, lng: -122.05677866946647 },
+      { lat: 37.305997428015736, lng: -122.05665528785177 },
+      { lat: 37.30818632200411, lng: -122.05661237250754 },
+      { lat: 37.30820765593997, lng: -122.05681085597463 },
+    ],
+  },
+  {
+    name: 'Columbus',
+    points: [
+      { lat: 37.30827450225476, lng: -122.05948054795954 },
+      { lat: 37.30820623369945, lng: -122.0594859123776 },
+      { lat: 37.308204100306085, lng: -122.05683857207988 },
+      { lat: 37.30829583616560, lng: -122.05685198312497 },
+      { lat: 37.30828090242866, lng: -122.05945909028742 },
+    ],
+  },
+  {
+    name: 'Hyannisport',
+    points: [
+      { lat: 37.311497276414, lng: -122.05938935301677 },
+      { lat: 37.31166794021547, lng: -122.05937862418071 },
+      { lat: 37.31162740759769, lng: -122.05653816467021 },
+      { lat: 37.31154420899803, lng: -122.05653011804318 },
+      { lat: 37.31148874321375, lng: -122.05934822570273 },
+    ],
+  },
+];
+
+// Spots every new game starts with, where an emergency meeting can be called
+// from (each just a named point). Empty by default — draw these once in the
+// lobby's "Meeting call spots" tool for the locked-in map, then they'll be
+// here for every future game the same way DEFAULT_AREA/DEFAULT_TASKS are.
+// If a room ends up with none set, meeting calls fall back to unrestricted
+// (see tryCallVote) so this never silently disables an existing feature.
+const DEFAULT_MEETING_LOCATIONS = [];
 
 // Tasks every new game starts with (name, location, and detailed
 // instructions shown by the task's Explain button). Fill these in as the
@@ -398,6 +468,13 @@ function endGame(room, winner, reason) {
 function startMeeting(room, reporter, victimName) {
   if (room.meetingTimer) clearTimeout(room.meetingTimer);
   pauseTimer(room); // the round clock freezes for the whole meeting
+  // Any road closure still active also freezes for the meeting — see
+  // blockEffectiveEndsAt / doTally for how it resumes afterward.
+  for (const b of room.activeBlocks) {
+    if (b.pausedRemainingMs == null && b.endsAt > now()) {
+      b.pausedRemainingMs = b.endsAt - now();
+    }
+  }
   room.phase = 'meeting';
   room.meeting = {
     reporterName: reporter.name,
@@ -405,6 +482,7 @@ function startMeeting(room, reporter, victimName) {
     endsAt: now() + room.settings.votingTime * 1000,
     votes: {},
   };
+  room.meetingChat = []; // never carries over from a previous voting session
   room.meetingTimer = setTimeout(() => {
     doTally(room);
     broadcast(room);
@@ -468,6 +546,14 @@ function doTally(room) {
   // Round clock resumes now that the meeting is over — unless the host has it
   // manually held, in which case it stays paused until they release it.
   if (!room.timerHeld) resumeTimer(room);
+  // Any road closure that was frozen for the meeting picks back up with
+  // however much time it had left.
+  for (const b of room.activeBlocks) {
+    if (b.pausedRemainingMs != null) {
+      b.endsAt = now() + b.pausedRemainingMs;
+      b.pausedRemainingMs = null;
+    }
+  }
   // Fresh kill cooldown after every meeting, like the real game.
   for (const p of Object.values(room.players)) {
     if (p.role === 'impostor') p.cooldownUntil = now() + room.settings.killCooldown * 1000;
@@ -496,6 +582,14 @@ function tryKill(room, actor, targetKey) {
 
   target.alive = false;
   target.deathAt = now();
+  // Ghost role is assigned instantly on death (the client only reveals it
+  // after the victim dismisses the kill screen — see the kill-modal-ok
+  // handler in app.js), but the ability to actually send a hint only
+  // unlocks once their body is found (see tryGhostHint). Skipped entirely
+  // if the host has turned the whole Troll/Helper package off.
+  if (room.settings.ghostRolesEnabled) {
+    target.ghostRole = Math.random() < 0.5 ? 'troll' : 'helper';
+  }
   // No body is pinned to the map. The victim physically stays put, and reports
   // key off their phone's live position instead of a frozen (GPS-inaccurate) spot.
   disburseTasks(room, target); // hand copies of their tasks to living crew
@@ -530,6 +624,53 @@ function tryReport(room, actor, bodyKey) {
 
   target.foundDead = true; // now publicly dead; can't be reported again
   startMeeting(room, actor, target.name);
+  return null;
+}
+
+// Troll/Helper ghost hint: the only "chat" a ghost has, and it's deliberately
+// not free text — the message is always the fixed phrase below with just a
+// location the player fills in, so a ghost can never type a player's name or
+// role. Sent to exactly one living player at a time (a private DM, not a
+// broadcast), only unlocks once the ghost's body is actually found, and is
+// rate-limited per player.
+function tryGhostHint(room, actor, location, targetKey) {
+  if (!room.settings.ghostRolesEnabled) return 'Ghost hints are turned off for this game.';
+  if (room.phase !== 'playing' && room.phase !== 'meeting') return 'Not right now.';
+  if (actor.alive || !actor.foundDead) return 'You can only send a ghost hint once your body has been found.';
+  if (now() < (actor.ghostChatCooldownUntil || 0)) return 'You need to wait before sending another hint.';
+  const target = room.players[targetKey];
+  if (!target || !target.alive) return 'Pick a living player to send it to.';
+  const clean = String(location || '').trim().slice(0, 60);
+  if (!clean) return 'Enter a location for the hint.';
+  actor.ghostChatCooldownUntil = now() + room.settings.ghostChatCooldown * 1000;
+  room.ghostMessages.push({
+    id: room.nextGhostMessageId++,
+    senderName: actor.name,
+    recipientKey: target.key,
+    location: clean,
+    ts: now(),
+  });
+  room.ghostMessages = room.ghostMessages.slice(-40); // bounded log, oldest fall off
+  return null;
+}
+
+// Backup text chat for the living during a meeting, in case the voice call
+// drops — plain free text (unlike the ghost hint), since it's just a stand-in
+// for talking out loud among people who could already hear each other. Wiped
+// at the start of every new meeting (see startMeeting) so it never carries
+// over between voting sessions.
+function tryMeetingChat(room, actor, text) {
+  if (room.phase !== 'meeting') return 'Chat is only available during a meeting.';
+  if (!actor.alive) return 'Only living players can use this chat.';
+  const clean = String(text || '').trim().slice(0, 200);
+  if (!clean) return 'Type something first.';
+  room.meetingChat.push({
+    id: room.nextMeetingChatId++,
+    senderName: actor.name,
+    text: clean,
+    ts: now(),
+  });
+  room.meetingChat = room.meetingChat.slice(-100);
   return null;
 }
 
@@ -587,6 +728,13 @@ function tryCallVote(room, actor) {
   if (room.phase !== 'playing') return 'You can only call a meeting during play.';
   if (!actor.alive) return 'You must be alive to call a meeting.';
   if (actor.calledMeeting) return 'You already used your one emergency meeting this game.';
+  // If the host hasn't set any meeting-call spots, calling stays unrestricted
+  // (old behavior) instead of silently becoming impossible.
+  if (room.meetingLocations.length > 0) {
+    if (!actor.pos) return 'You need a GPS fix to call a meeting.';
+    const nearSpot = room.meetingLocations.some((m) => feetBetween(actor.pos, m) <= room.settings.meetingCallRange);
+    if (!nearSpot) return 'You must be near a designated meeting-call spot to do that.';
+  }
   actor.calledMeeting = true;
   startMeeting(room, actor, null);
   return null;
@@ -613,6 +761,48 @@ function trySeeLocation(room, actor) {
     until: now() + 20000,
     players: chosen.map((q) => ({ key: q.key, name: q.name, lat: q.pos.lat, lng: q.pos.lng })),
   };
+  return null;
+}
+
+// How long an active block has left, honoring a meeting-freeze: while a
+// meeting is in progress, a block's remaining time is captured once (see
+// startMeeting) and this keeps recomputing an endsAt that drifts forward in
+// lockstep with real time, so the countdown appears frozen to every client
+// without needing to touch them again until the meeting actually ends (see
+// doTally, which converts pausedRemainingMs back into a real endsAt).
+function blockEffectiveEndsAt(room, b) {
+  return b.pausedRemainingMs != null ? now() + b.pausedRemainingMs : b.endsAt;
+}
+
+// Impostor-only, repeatable: closes off a host-drawn street section for
+// blockDuration seconds, then locks the SAME impostor out of THAT section
+// (not the ability itself, and not other impostors) for the rest of the
+// game — tracked in actor.usedSegments. The reuse cooldown runs on wall-clock
+// time same as kill (a meeting never pauses it), but the ACTIVE closure
+// itself does freeze for the duration of any meeting — see
+// blockEffectiveEndsAt. Purely a visual/social signal to everyone (there's no
+// way to actually block a real road), enforced by the red map highlight and
+// a big alert, not by game logic.
+function tryBlockLocation(room, actor, segmentId) {
+  if (room.phase !== 'playing') return 'Not right now.';
+  if (actor.role !== 'impostor') return 'Not available to crew.';
+  if (!actor.alive) return 'You must be alive to do that.';
+  if (now() < (actor.blockCooldownUntil || 0)) return 'Block Location is still on cooldown.';
+  const segment = room.streetSegments.find((s) => s.id === segmentId);
+  if (!segment) return 'That street section no longer exists.';
+  if ((actor.usedSegments || []).includes(segmentId)) return "You've already blocked that section this game.";
+  const s = room.settings;
+  actor.usedSegments = [...(actor.usedSegments || []), segmentId];
+  actor.blockCooldownUntil = now() + (s.blockDuration + s.blockCooldown) * 1000;
+  room.activeBlocks = room.activeBlocks.filter((b) => blockEffectiveEndsAt(room, b) > now());
+  room.activeBlocks.push({
+    id: room.nextBlockId++,
+    segmentId: segment.id,
+    name: segment.name,
+    points: segment.points.map((p) => ({ ...p })),
+    endsAt: now() + s.blockDuration * 1000,
+    pausedRemainingMs: null, // set while a meeting freezes this block's countdown
+  });
   return null;
 }
 
@@ -670,6 +860,19 @@ function viewFor(room, p) {
     taskProgress: displayedTaskProgress(room),
     tasks: room.tasks,
     area: room.area,
+    streetSegments: room.streetSegments,
+    meetingLocations: room.meetingLocations,
+    // Backup text chat for the living during a meeting (voice-call fallback).
+    // Visible to everyone present (dead players can watch, like the vote
+    // list), but only living players can actually send to it — see
+    // tryMeetingChat. Wiped at the start of every new meeting.
+    meetingChat: room.phase === 'meeting' ? room.meetingChat : [],
+    // Public to everyone — a block is a visible, announced event, same as a
+    // body being found. Never includes who placed it (that stays server-side
+    // only, in each player's own usedSegments, so it can't out the impostor).
+    activeBlocks: room.activeBlocks
+      .filter((b) => blockEffectiveEndsAt(room, b) > now())
+      .map((b) => ({ id: b.id, name: b.name, points: b.points, endsAt: blockEffectiveEndsAt(room, b) })),
     autoScale: !!room.autoScale,
     roundSecondsLeft: Math.ceil(timerRemainingMs(room) / 1000),
     roundPaused: room.phase === 'meeting' || !!room.timerHeld,
@@ -695,6 +898,21 @@ function viewFor(room, p) {
       gpsFresh: freshPos(room, p),
       calledMeeting: !!p.calledMeeting,
       usedSeeLocation: !!p.usedSeeLocation,
+      blockCooldownUntil: p.blockCooldownUntil || 0,
+      usedSegments: p.usedSegments || [],
+      // Private to this player alone — living players and other ghosts never
+      // learn who's Troll vs Helper, only the fixed-format hints they send.
+      ghostRole: p.ghostRole || null,
+      ghostChatCooldownUntil: p.ghostChatCooldownUntil || 0,
+      // Ghost hints are DMs: only the one player a hint was sent to ever sees
+      // it, and only on the game screen (never during a meeting).
+      ghostInbox: room.ghostMessages.filter((m) => m.recipientKey === p.key),
+      // Whether calling an emergency meeting is currently allowed by location.
+      // No spots configured at all = unrestricted, so this feature can never
+      // silently disable meetings for a room the host hasn't set spots up in.
+      nearMeetingLocation: room.meetingLocations.length === 0
+        || (room.phase === 'playing' && p.alive && freshPos(room, p)
+          && room.meetingLocations.some((m) => feetBetween(p.pos, m) <= s.meetingCallRange)),
     },
     killTargets: [],
     nearbyBodies: [],
@@ -750,6 +968,8 @@ function viewFor(room, p) {
         cooldownUntil: b.cooldownUntil || 0,
         calledMeeting: !!b.calledMeeting,
         usedSeeLocation: !!b.usedSeeLocation,
+        blockCooldownUntil: b.blockCooldownUntil || 0,
+        usedSegments: b.usedSegments || [],
       }));
     }
   }
@@ -794,6 +1014,10 @@ function makePlayer(key, name, socketId) {
     calledMeeting: false,   // each player gets exactly one emergency-meeting call per game
     usedSeeLocation: false, // each crewmate gets exactly one See Location use per game
     seeLocationReveal: null,
+    blockCooldownUntil: 0, // impostor-only: wall-clock time Block Location becomes available again
+    usedSegments: [],      // impostor-only: street section ids this player has already blocked this game (never reusable)
+    ghostRole: null,           // 'troll' or 'helper', assigned the instant this player is killed
+    ghostChatCooldownUntil: 0, // wall-clock time this ghost can send another hint
   };
 }
 
@@ -823,6 +1047,16 @@ io.on('connection', (socket) => {
       winner: null,
       nextTaskId: 1,
       nextAssignmentId: 1,
+      nextSegmentId: 1,
+      nextBlockId: 1,
+      nextMeetingLocationId: 1,
+      nextGhostMessageId: 1,
+      nextMeetingChatId: 1,
+      streetSegments: [],
+      activeBlocks: [],
+      meetingLocations: [],
+      ghostMessages: [],
+      meetingChat: [],
       autoScale: true, // tasksPerPlayer + roundLength track player count until the host edits them
       timeLeftMs: 0,
       timerStartedAt: null,
@@ -837,6 +1071,17 @@ io.on('connection', (socket) => {
       photo: !!t.photo,
       anywhere: !!t.anywhere,
       collaborative: !!t.collaborative,
+    }));
+    room.streetSegments = DEFAULT_STREET_SEGMENTS.map((s) => ({
+      id: room.nextSegmentId++,
+      name: s.name,
+      points: s.points.map((p) => ({ ...p })),
+    }));
+    room.meetingLocations = DEFAULT_MEETING_LOCATIONS.map((m) => ({
+      id: room.nextMeetingLocationId++,
+      name: m.name,
+      lat: m.lat,
+      lng: m.lng,
     }));
     room.players[key] = makePlayer(key, name, socket.id);
     applyAutoScale(room);
@@ -892,6 +1137,7 @@ io.on('connection', (socket) => {
       if (k === 'tasksPerPlayer' || k === 'roundLength') room.autoScale = false;
     }
     if (typeof partial.timerAutoStart === 'boolean') room.settings.timerAutoStart = partial.timerAutoStart;
+    if (typeof partial.ghostRolesEnabled === 'boolean') room.settings.ghostRolesEnabled = partial.ghostRolesEnabled;
     broadcast(room);
   });
 
@@ -933,6 +1179,35 @@ io.on('connection', (socket) => {
     broadcast(room);
   });
 
+  socket.on('setStreetSegments', (segments) => {
+    const { room, player } = ctx();
+    if (!room || !player || player.key !== room.hostKey) return;
+    if (room.phase !== 'lobby') return fail('Street sections can only change before the game starts.');
+    if (!Array.isArray(segments)) return;
+    room.streetSegments = segments.slice(0, 50).map((s) => ({
+      id: room.nextSegmentId++,
+      name: String(s.name || 'Street section').trim().slice(0, 60),
+      points: (Array.isArray(s.points) ? s.points : [])
+        .map((p) => ({ lat: Number(p.lat), lng: Number(p.lng) }))
+        .filter((p) => Number.isFinite(p.lat) && Number.isFinite(p.lng)),
+    })).filter((s) => s.points.length >= 2);
+    broadcast(room);
+  });
+
+  socket.on('setMeetingLocations', (locations) => {
+    const { room, player } = ctx();
+    if (!room || !player || player.key !== room.hostKey) return;
+    if (room.phase !== 'lobby') return fail('Meeting call spots can only change before the game starts.');
+    if (!Array.isArray(locations)) return;
+    room.meetingLocations = locations.slice(0, 50).map((m) => ({
+      id: room.nextMeetingLocationId++,
+      name: String(m.name || 'Meeting spot').trim().slice(0, 60),
+      lat: Number(m.lat),
+      lng: Number(m.lng),
+    })).filter((m) => Number.isFinite(m.lat) && Number.isFinite(m.lng));
+    broadcast(room);
+  });
+
   socket.on('start', () => {
     const { room, player } = ctx();
     if (!room || !player || player.key !== room.hostKey) return;
@@ -968,6 +1243,10 @@ io.on('connection', (socket) => {
       p.calledMeeting = false;
       p.usedSeeLocation = false;
       p.seeLocationReveal = null;
+      p.blockCooldownUntil = 0;
+      p.usedSegments = [];
+      p.ghostRole = null;
+      p.ghostChatCooldownUntil = 0;
       // Short opening grace instead of a full cooldown: long enough that nobody
       // gets knifed while role cards are still on screen, but the impostor can
       // hunt right away. (After that, kills use the full cooldown as usual.)
@@ -1011,6 +1290,8 @@ io.on('connection', (socket) => {
 
     room.lastVote = null;
     room.winner = null;
+    room.activeBlocks = [];
+    room.ghostMessages = [];
     room.timeLeftMs = s.roundLength * 1000;
     if (s.timerAutoStart) {
       room.timerStartedAt = now();
@@ -1037,6 +1318,22 @@ io.on('connection', (socket) => {
     const { room, player } = ctx();
     if (!room || !player) return;
     const err = tryReport(room, player, bodyKey);
+    if (err) return fail(err);
+    broadcast(room);
+  });
+
+  socket.on('ghostHint', ({ location, targetKey }) => {
+    const { room, player } = ctx();
+    if (!room || !player) return;
+    const err = tryGhostHint(room, player, location, targetKey);
+    if (err) return fail(err);
+    broadcast(room);
+  });
+
+  socket.on('meetingChat', ({ text }) => {
+    const { room, player } = ctx();
+    if (!room || !player) return;
+    const err = tryMeetingChat(room, player, text);
     if (err) return fail(err);
     broadcast(room);
   });
@@ -1074,6 +1371,14 @@ io.on('connection', (socket) => {
     const { room, player } = ctx();
     if (!room || !player) return;
     const err = trySeeLocation(room, player);
+    if (err) return fail(err);
+    broadcast(room);
+  });
+
+  socket.on('blockLocation', ({ segmentId }) => {
+    const { room, player } = ctx();
+    if (!room || !player) return;
+    const err = tryBlockLocation(room, player, segmentId);
     if (err) return fail(err);
     broadcast(room);
   });
@@ -1160,6 +1465,7 @@ io.on('connection', (socket) => {
     else if (action === 'vote') err = tryVote(room, bot, target);
     else if (action === 'callVote') err = tryCallVote(room, bot);
     else if (action === 'seeLocation') err = trySeeLocation(room, bot);
+    else if (action === 'blockLocation') err = tryBlockLocation(room, bot, target);
     if (err) return fail(`${bot.name}: ${err}`);
     broadcast(room);
   });
