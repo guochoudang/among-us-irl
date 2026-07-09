@@ -46,6 +46,11 @@
       <h3>Game settings</h3>
       <div id="settings-form" class="card"></div>
       <div class="setting-row">
+        <label for="set-roundTimerEnabled">Round timer (ends the game if time runs out)</label>
+        <input type="checkbox" id="set-roundTimerEnabled">
+      </div>
+      <p class="hint">Off by default. When on, the impostor automatically wins if the round length below runs out before the crew finishes tasks or catches them.</p>
+      <div class="setting-row">
         <label for="set-timerAutoStart">Start the round timer immediately when I tap Start game</label>
         <input type="checkbox" id="set-timerAutoStart">
       </div>
@@ -60,6 +65,8 @@
         <input type="checkbox" id="set-taskDisbursementEnabled">
       </div>
       <p class="hint">When on, a killed player's unfinished tasks are immediately copied to a living crewmate — a free hint that a kill just happened. Off by default so dying doesn't automatically tip anyone off.</p>
+      <h3>Sabotage</h3>
+      <p class="hint">The impostor can trigger Reactor (Bel Aire Court, needs 2 people to fix) or O2 (Leavesley Place, needs 1) on a cooldown. Can't be used while a road is blocked, or vice versa. Durations and cooldown are in the settings above.</p>
       <h3>Tasks <span id="task-count" class="pill"></span></h3>
       <p class="hint">Tap the map where a task should be, give it a name. Blue dots are your created tasks — tap one to remove it.</p>
       <div id="lobby-map" class="map"></div>
@@ -95,6 +102,7 @@
     <span id="round-chip" class="chip"></span>
     <span id="progress-chip" class="chip"></span>
     <span id="gps-chip" class="chip"></span>
+    <span id="sabotage-chip" class="chip sabotage hidden"></span>
   </div>
   <div id="round-popover" class="hidden">
     <button id="btn-toggle-timer"></button>
@@ -106,10 +114,13 @@
   <div id="panel">
     <div id="dead-area"></div>
     <div id="ghost-log-game"></div>
+    <div id="sabotage-panel"></div>
     <div id="task-list"></div>
     <button id="btn-callvote" class="small hidden">🚨 Call emergency meeting (1 use)</button>
     <button id="btn-seelocation" class="small hidden">👁 See location (1 use)</button>
     <button id="btn-blocklocation" class="small hidden">🚫 Block Location</button>
+    <button id="btn-sabotage" class="small hidden">☢️ Sabotage</button>
+    <div id="sabotage-picker" class="hidden"></div>
     <div id="test-panel"></div>
     <div id="kill-panel"></div>
   </div>
@@ -215,6 +226,18 @@
     <h1 id="eject-modal-title"></h1>
     <p id="eject-modal-sub"></p>
     <button id="eject-modal-ok" class="big">Got it</button>
+  </div>
+</div>
+
+<!-- Reused for both the "sabotage started" and "sabotage fixed" reveals —
+     everyone sees this, same stay-up-until-dismissed pattern as eject-modal.
+     A sabotage that times out instead ends the game, so that case is left to
+     the end screen rather than shown here. -->
+<div id="sabotage-modal" class="modal hidden">
+  <div class="modal-inner">
+    <h1 id="sabotage-modal-title"></h1>
+    <p id="sabotage-modal-sub"></p>
+    <button id="sabotage-modal-ok" class="big">Got it</button>
   </div>
 </div>
 

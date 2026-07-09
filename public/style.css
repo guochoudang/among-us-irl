@@ -183,6 +183,7 @@ button.small { font-size: 0.85rem; padding: 8px 12px; background: #34344e; }
 .chip.paused { background: var(--orange); color: #221600; }
 .chip.low { background: var(--red); }
 .chip.held { background: var(--green); color: #08210f; }
+.chip.sabotage { background: var(--red); }
 
 #round-popover {
   background: #12121f;
@@ -243,9 +244,43 @@ button.small { font-size: 0.85rem; padding: 8px 12px; background: #34344e; }
    whatever was below it. Leaving min-height unset falls back to the
    automatic content-based floor (same mechanism that already keeps task rows
    from clipping), so the button can grow but never shrinks below its text. */
-#btn-callvote, #btn-seelocation, #btn-blocklocation { flex: 5 1 0; }
+#btn-callvote, #btn-seelocation, #btn-blocklocation, #btn-sabotage { flex: 5 1 0; }
 
-#btn-callvote, #btn-seelocation, #btn-blocklocation { font-size: 1.2rem; font-weight: 600; padding: 14px; }
+#btn-callvote, #btn-seelocation, #btn-blocklocation, #btn-sabotage { font-size: 1.2rem; font-weight: 600; padding: 14px; }
+#btn-sabotage { background: var(--red); }
+
+/* Reactor/O2 choice, shown under the Sabotage button while picking. */
+#sabotage-picker { display: flex; flex-wrap: wrap; gap: 8px; }
+#sabotage-picker button { flex: 1 1 45%; min-height: 48px; padding: 10px; font-size: 1rem; background: #34344e; }
+#sabotage-picker button:disabled { opacity: 0.5; }
+
+/* Active-sabotage card: progress + timer + the code-entry box. Styled like a
+   task row but tinted red so it reads as urgent. */
+.sabotage-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: #3a2030;
+  border: 2px solid var(--red);
+  border-radius: 12px;
+  padding: 14px;
+}
+.sabotage-card .sabotage-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; font-weight: 700; }
+.sabotage-card .sabotage-progress { font-size: 1.2rem; }
+.sabotage-card .sabotage-timer { font-size: 1.2rem; color: var(--red); }
+.sabotage-input-row { display: flex; gap: 8px; }
+/* The code is shown as the placeholder ("the background of the text box")
+   rather than typed content, so it needs to be big and legible at a glance —
+   this is read off the screen and retyped, not a secret to protect. */
+.sabotage-code-input {
+  flex: 1;
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 1.6rem;
+  letter-spacing: 0.25em;
+  text-align: center;
+  padding: 10px;
+}
+.sabotage-input-row button { flex: none; padding: 10px 16px; font-size: 1rem; }
 
 /* Kill button matches the same text scale as tasks/power buttons. */
 #kill-panel button { font-size: 1.2rem; font-weight: 600; min-height: 56px; padding: 14px; }
@@ -352,6 +387,10 @@ button.small { font-size: 0.85rem; padding: 8px 12px; background: #34344e; }
 #eject-modal-title { font-size: clamp(1.6rem, 8vw, 2.8rem); line-height: 1.2; overflow-wrap: break-word; }
 #eject-modal-sub { font-size: 1.3rem; line-height: 1.4; }
 #eject-modal-ok { font-size: 1.5rem; padding: 20px; }
+
+#sabotage-modal-title { font-size: clamp(1.6rem, 8vw, 2.8rem); line-height: 1.2; overflow-wrap: break-word; color: var(--red); }
+#sabotage-modal-sub { font-size: 1.3rem; line-height: 1.4; }
+#sabotage-modal-ok { font-size: 1.5rem; padding: 20px; }
 
 /* Block Location alert — bold and unmissable like the modals above, but never
    traps input: everyone still needs to move during the 2-minute closure, so

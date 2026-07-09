@@ -142,6 +142,14 @@ let addingMeetingLocation = false; // host (lobby): next map tap adds a spot
 const meetingLocLayers = { lobby: null, game: null };
 const lastMeetingLocHash = { lobby: '', game: '' };
 
+// Sabotage: fixed spots on the game map (red while that one's active), the
+// impostor's trigger button/picker, and the fix-it panel/code entry.
+let sabotageSpotLayer = null;
+let lastSabotageSpotHash = '';
+let placingSabotage = false; // impostor tapped Sabotage — picker is open
+let lastSabotageIdShown = 0; // dedupes the "was sabotaged" reveal per sabotage instance
+let lastSabotageResultShown = 0; // dedupes the "was fixed" reveal, by lastSabotageResult.at
+
 // ---------- helpers ----------
 function feetBetween(a, b) {
   const R = 20902231;
@@ -488,6 +496,26 @@ function renderMeetingLocations(map, which) {
   $('meetingloc-count') && ($('meetingloc-count').textContent = locs.length);
 }
 
+// Fixed sabotage spots on the game map — always visible so everyone knows
+// where Reactor/O2 are, turning red for whichever one is currently active.
+function renderSabotageSpots(map) {
+  if (!map || !state) return;
+  const spots = state.sabotageSpots || [];
+  const activeType = state.sabotage ? state.sabotage.type : null;
+  const hash = JSON.stringify([spots, activeType]);
+  if (lastSabotageSpotHash === hash) return;
+  lastSabotageSpotHash = hash;
+  if (!sabotageSpotLayer) sabotageSpotLayer = L.layerGroup().addTo(map);
+  sabotageSpotLayer.clearLayers();
+  for (const s of spots) {
+    const active = s.type === activeType;
+    L.circleMarker([s.lat, s.lng], {
+      radius: active ? 9 : 7, color: '#fff', weight: 1.5,
+      fillColor: active ? '#ff4757' : '#555568', fillOpacity: 1,
+    }).addTo(sabotageSpotLayer).bindTooltip(`${s.name} (${s.label})`);
+  }
+}
+
 function updateSegmentDraft() {
   if (draftSegmentLayer) {
     lobbyMap.removeLayer(draftSegmentLayer);
@@ -558,6 +586,39 @@ function renderBlockPicker() {
     L.polyline(seg.points.map((p) => [p.lat, p.lng]), {
       color: isUsed ? '#666' : '#ffa502', weight: 5, dashArray: '8 6', opacity: 0.9,
     }).addTo(pickerLayer).bindTooltip(seg.name + (isUsed ? ' (already used)' : ''));
+  }
+}
+
+// Impostor-only: choosing which of the two fixed sabotage spots to trigger.
+// Unlike Block Location there's nothing to tap on the map — the spots are
+// fixed, not host-drawn — so this is just two buttons, each showing why
+// they're disabled (cooldown, a road already blocked, or one already active).
+function renderSabotagePicker() {
+  const el = $('sabotage-picker');
+  el.innerHTML = '';
+  el.classList.toggle('hidden', !placingSabotage);
+  if (!placingSabotage || !state) return;
+  const onCooldown = Date.now() < (state.you.sabotageCooldownUntil || 0);
+  const roadBlocked = (state.activeBlocks || []).length > 0;
+  const alreadyActive = !!state.sabotage;
+  for (const spot of (state.sabotageSpots || [])) {
+    const btn = document.createElement('button');
+    const disabled = onCooldown || roadBlocked || alreadyActive;
+    btn.disabled = disabled;
+    const icon = spot.type === 'reactor' ? '☢️' : '🫁';
+    let label = `${icon} ${spot.name} (${spot.label})`;
+    if (onCooldown) label += ` — wait ${fmt(Math.max(0, Math.ceil(((state.you.sabotageCooldownUntil || 0) - Date.now()) / 1000)))}`;
+    else if (roadBlocked) label += ' — a road is blocked';
+    else if (alreadyActive) label += ' — already active';
+    btn.textContent = label;
+    btn.onclick = async () => {
+      if (await askYesNo(`Trigger the ${spot.name} sabotage at ${spot.label}?`)) {
+        socket.emit('sabotage', { type: spot.type });
+      }
+      placingSabotage = false;
+      renderSabotagePicker();
+    };
+    el.append(btn);
   }
 }
 
@@ -836,6 +897,25 @@ function renderTestPanel(containerId) {
           row.append(blk);
         }
       }
+      if (b.alive && b.role === 'impostor' && !state.sabotage
+        && Date.now() >= (b.sabotageCooldownUntil || 0) && !(state.activeBlocks || []).length) {
+        const reactorBtn = document.createElement('button');
+        reactorBtn.className = 'danger';
+        reactorBtn.textContent = '☢️ Sabotage Reactor';
+        reactorBtn.onclick = act('sabotage', 'reactor');
+        row.append(reactorBtn);
+        const o2Btn = document.createElement('button');
+        o2Btn.className = 'danger';
+        o2Btn.textContent = '🫁 Sabotage O2';
+        o2Btn.onclick = act('sabotage', 'o2');
+        row.append(o2Btn);
+      }
+      if (state.sabotage && (b.alive || b.foundDead || b.ejected)) {
+        const fixBtn = document.createElement('button');
+        fixBtn.textContent = '🛠 Fix sabotage';
+        fixBtn.onclick = act('sabotageFix');
+        row.append(fixBtn);
+      }
       if (b.alive) {
         const rep = document.createElement('button');
         rep.textContent = 'Report body';
@@ -923,6 +1003,10 @@ const SETTINGS_META = [
   ['blockCooldown', 'Block Location cooldown after (seconds)'],
   ['meetingCallRange', 'Emergency meeting call range (feet)'],
   ['ghostChatCooldown', 'Ghost hint cooldown (seconds)'],
+  ['sabotageCooldown', 'Sabotage cooldown (seconds)'],
+  ['sabotageReactorDuration', 'Reactor sabotage duration (seconds)'],
+  ['sabotageO2Duration', 'O2 sabotage duration (seconds)'],
+  ['sabotageFixRange', 'Sabotage fix range (feet)'],
 ];
 let settingsBuilt = false;
 
@@ -994,6 +1078,8 @@ function fillSettingsForm() {
       ? `Tasks per player and round time are auto-set for ${state.players.length} players (adding/removing players updates them). Change either by hand to lock them in.`
       : 'Tasks per player and round time are locked in by hand — tap "Use recommended" to go back to auto.';
   }
+  const roundTimerBox = $('set-roundTimerEnabled');
+  if (roundTimerBox && document.activeElement !== roundTimerBox && !hasPendingSetting('roundTimerEnabled')) roundTimerBox.checked = state.settings.roundTimerEnabled;
   const autoStartBox = $('set-timerAutoStart');
   if (autoStartBox && document.activeElement !== autoStartBox && !hasPendingSetting('timerAutoStart')) autoStartBox.checked = state.settings.timerAutoStart;
   const ghostRolesBox = $('set-ghostRolesEnabled');
@@ -1112,6 +1198,7 @@ function renderGame() {
   renderGameTasks();
   renderArea(gameMap, 'game');
   renderMeetingLocations(gameMap, 'game');
+  renderSabotageSpots(gameMap);
 
   const you = state.you;
 
@@ -1152,6 +1239,13 @@ function renderGame() {
   const canBlockLocation = you.alive && you.role === 'impostor' && state.phase === 'playing';
   $('btn-blocklocation').classList.toggle('hidden', !canBlockLocation);
   if (!canBlockLocation && placingBlock) { placingBlock = false; renderBlockPicker(); }
+
+  // Sabotage sits below Block Location, same slot/role rules — repeatable on
+  // a cooldown, so it stays visible (with a countdown) rather than vanishing
+  // once used.
+  const canSabotage = you.alive && you.role === 'impostor' && state.phase === 'playing';
+  $('btn-sabotage').classList.toggle('hidden', !canSabotage);
+  if (!canSabotage && placingSabotage) { placingSabotage = false; renderSabotagePicker(); }
 
   renderBots();
   renderSeeLocationReveal();
@@ -1290,6 +1384,96 @@ function renderGhostInbox(containerId) {
     row.className = 'ghost-log-row';
     row.textContent = `${m.senderName}: The imposter is headed toward ${m.location}`;
     el.append(row);
+  }
+}
+
+// Active-sabotage fix-it card: progress, live countdown, and the code entry
+// (anyone — impostor included — can contribute). Only meaningful on the game
+// screen, same as tasks. Builds the card once per sabotage instance and only
+// touches the input/progress/timer text on later ticks — never recreating
+// the input — for the same reason renderGhostComposer does: this re-runs
+// every ~2s from ordinary GPS-driven broadcasts, and rebuilding an <input>
+// that often would wipe whatever the player's mid-typing.
+function renderSabotagePanel() {
+  const container = $('sabotage-panel');
+  if (!state || state.phase !== 'playing' || !state.sabotage) {
+    container.innerHTML = '';
+    return;
+  }
+  const sab = state.sabotage;
+  const spot = (state.sabotageSpots || []).find((s) => s.type === sab.type);
+  let card = container.querySelector('.sabotage-card');
+  const needsRebuild = !card
+    || card.dataset.sabotageId !== String(sab.id)
+    || card.dataset.fixedByYou !== String(sab.fixedByYou);
+
+  if (needsRebuild) {
+    container.innerHTML = '';
+    card = document.createElement('div');
+    card.className = 'sabotage-card';
+    card.dataset.sabotageId = String(sab.id);
+    card.dataset.fixedByYou = String(sab.fixedByYou);
+
+    const head = document.createElement('div');
+    head.className = 'sabotage-head';
+    const title = document.createElement('span');
+    title.textContent = sab.type === 'reactor' ? '☢️ Fix the REACTOR' : '🫁 Fix the O2';
+    const progress = document.createElement('span');
+    progress.className = 'sabotage-progress';
+    progress.id = 'sabotage-progress-text';
+    head.append(title, progress);
+    card.append(head);
+
+    const timer = document.createElement('div');
+    timer.className = 'sabotage-timer';
+    timer.id = 'sabotage-timer-text';
+    card.append(timer);
+
+    if (spot) {
+      const locHint = document.createElement('p');
+      locHint.className = 'hint';
+      locHint.textContent = `Head to ${spot.label} and enter the code below.`;
+      card.append(locHint);
+    }
+
+    if (!sab.fixedByYou) {
+      const row = document.createElement('div');
+      row.className = 'sabotage-input-row';
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.inputMode = 'numeric';
+      input.maxLength = 5;
+      input.placeholder = sab.code;
+      input.className = 'sabotage-code-input';
+      const submitBtn = document.createElement('button');
+      submitBtn.textContent = 'Enter';
+      submitBtn.onclick = async () => {
+        const val = input.value.trim();
+        if (!val) return toast('Type the code first.');
+        if (spot) {
+          const far = !myPos || feetBetween(myPos, spot) > state.settings.sabotageFixRange;
+          if (far && !(await askYesNo(`You don't seem to be at ${spot.label}. Did you actually complete this?`))) return;
+        }
+        socket.emit('sabotageFix', { code: val });
+        input.value = '';
+      };
+      row.append(input, submitBtn);
+      card.append(row);
+    } else {
+      const done = document.createElement('p');
+      done.className = 'hint';
+      done.textContent = "You've entered the code — waiting on the rest.";
+      card.append(done);
+    }
+    container.append(card);
+  }
+
+  const progressEl = card.querySelector('#sabotage-progress-text');
+  if (progressEl) progressEl.textContent = `${sab.fixedCount}/${sab.required}`;
+  const timerEl = card.querySelector('#sabotage-timer-text');
+  if (timerEl) {
+    const left = Math.max(0, Math.ceil((sab.endsAt - Date.now()) / 1000));
+    timerEl.textContent = `⏳ ${fmt(left)} remaining`;
   }
 }
 
@@ -1592,15 +1776,35 @@ function renderDynamic() {
   // Round clock: visible to everyone, freezes during meetings, ticks locally
   // between server updates so it doesn't need a push every second. A host-held
   // pause (or "not started yet") shows green; a plain meeting-freeze is orange.
+  // Hidden entirely when the host has the round timer turned off — there's no
+  // countdown to show, and holding/releasing it would be meaningless.
   const round = $('round-chip');
   let roundLeftNow = null;
-  if (round && roundBase && (state.phase === 'playing' || state.phase === 'meeting')) {
+  const roundTimerOn = !!(state.settings && state.settings.roundTimerEnabled);
+  if (round) round.classList.toggle('hidden', !roundTimerOn);
+  if (roundTimerOn && round && roundBase && (state.phase === 'playing' || state.phase === 'meeting')) {
     const elapsed = roundBase.paused ? 0 : Math.floor((Date.now() - roundBase.receivedAt) / 1000);
     roundLeftNow = Math.max(0, roundBase.secondsLeft - elapsed);
     round.textContent = roundBase.paused ? `⏸ ${fmt(roundLeftNow)}` : `⏱ ${fmt(roundLeftNow)}`;
     round.className = 'chip ' + (roundBase.held ? 'held' : roundBase.paused ? 'paused' : roundLeftNow <= 60 ? 'low' : '');
   }
-  updateRoundPopoverButton(roundLeftNow);
+  if (roundTimerOn) updateRoundPopoverButton(roundLeftNow);
+  else $('round-popover').classList.add('hidden');
+
+  // Sabotage: visible to everyone while active, showing progress + a live
+  // countdown. state.sabotage.endsAt is already an absolute server timestamp
+  // (like meeting/block endsAt elsewhere), so no local snapshot is needed —
+  // just compare directly against Date.now() each tick.
+  const sabChip = $('sabotage-chip');
+  if (state.sabotage) {
+    const left = Math.max(0, Math.ceil((state.sabotage.endsAt - Date.now()) / 1000));
+    const label = state.sabotage.type === 'reactor' ? 'REACTOR' : 'O2';
+    sabChip.textContent = `☢️ ${label} ${state.sabotage.fixedCount}/${state.sabotage.required} · ${fmt(left)}`;
+    sabChip.classList.remove('hidden');
+  } else {
+    sabChip.classList.add('hidden');
+  }
+  renderSabotagePanel();
 
   // live task distances
   document.querySelectorAll('.task-dist').forEach((el) => {
@@ -1793,7 +1997,10 @@ function renderEnd() {
   let sub;
   if (crewWon) sub = 'All tasks done or every impostor voted out.';
   else if (state.winReason === 'timeout') sub = "Time ran out before the impostor was caught.";
-  else sub = 'The crew has fallen.';
+  else if (state.winReason === 'sabotage') {
+    const label = state.lastSabotageResult && state.lastSabotageResult.type === 'reactor' ? 'Reactor' : 'O2';
+    sub = `The ${label} sabotage wasn't fixed in time.`;
+  } else sub = 'The crew has fallen.';
   // The last vote's result ("Nobody was ejected.", etc.) only makes sense as
   // context for a crew win via ejection — it's just noise on an impostor win.
   if (crewWon && state.lastVote) sub += ` (${state.lastVote.text})`;
@@ -1822,8 +2029,32 @@ socket.on('state', (s) => {
   }
 });
 
+// Sabotage reveals: "started" and "fixed" share one modal (like ghost-modal's
+// troll/helper reveal). A timeout instead ends the game via checkWin, so
+// that case is left to the end screen rather than shown here. sabotage.id and
+// lastSabotageResult.at are both server-side monotonic values that are never
+// reused across games in the same room, so no per-game reset is needed.
+socket.on('state', (s) => {
+  if (s.sabotage && s.sabotage.id !== lastSabotageIdShown) {
+    lastSabotageIdShown = s.sabotage.id;
+    const spot = (s.sabotageSpots || []).find((sp) => sp.type === s.sabotage.type);
+    const label = s.sabotage.type === 'reactor' ? 'REACTOR' : 'O2';
+    $('sabotage-modal-title').textContent = `${label} was sabotaged at ${spot ? spot.label : ''}.`;
+    $('sabotage-modal-sub').textContent = 'Head there and enter the code to stop it.';
+    $('sabotage-modal').classList.remove('hidden');
+  }
+  if (s.lastSabotageResult && s.lastSabotageResult.outcome === 'fixed' && s.lastSabotageResult.at !== lastSabotageResultShown) {
+    lastSabotageResultShown = s.lastSabotageResult.at;
+    const label = s.lastSabotageResult.type === 'reactor' ? 'REACTOR' : 'O2';
+    $('sabotage-modal-title').textContent = `${label} was fixed.`;
+    $('sabotage-modal-sub').textContent = '';
+    $('sabotage-modal').classList.remove('hidden');
+  }
+});
+
 $('btn-start').onclick = () => socket.emit('start');
 $('btn-addbot').onclick = () => socket.emit('addBot');
+$('set-roundTimerEnabled').onchange = (e) => settingChanged('roundTimerEnabled', e.target.checked);
 $('set-timerAutoStart').onchange = (e) => settingChanged('timerAutoStart', e.target.checked);
 $('set-ghostRolesEnabled').onchange = (e) => settingChanged('ghostRolesEnabled', e.target.checked);
 $('set-taskDisbursementEnabled').onchange = (e) => settingChanged('taskDisbursementEnabled', e.target.checked);
@@ -1910,6 +2141,10 @@ $('btn-blocklocation').onclick = () => {
   renderBlockPicker();
   if (placingBlock) toast('Tap a drawn (orange) street section on the map to block it.');
 };
+$('btn-sabotage').onclick = () => {
+  placingSabotage = !placingSabotage;
+  renderSabotagePicker();
+};
 $('role-modal-ok').onclick = () => $('role-modal').classList.add('hidden');
 // The ghost-role card appears right after the kill screen is dismissed
 // (never stacked on top of it), once per game — ghostRole is set server-side
@@ -1932,6 +2167,7 @@ $('kill-modal-ok').onclick = () => {
 $('redzone-modal-ok').onclick = () => $('redzone-modal').classList.add('hidden');
 $('ghost-modal-ok').onclick = () => $('ghost-modal').classList.add('hidden');
 $('eject-modal-ok').onclick = () => $('eject-modal').classList.add('hidden');
+$('sabotage-modal-ok').onclick = () => $('sabotage-modal').classList.add('hidden');
 $('block-banner').onclick = () => {
   clearTimeout(blockBannerTimer);
   $('block-banner').classList.add('hidden');
