@@ -43,8 +43,8 @@ body {
 #lobby-scroll { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; justify-content: space-between; }
 #btn-start {
   flex: none;
-  font-size: 2.6rem;
-  padding: 32px 14px;
+  font-size: 1.6rem;
+  padding: 20px 14px;
   margin: 0 0 14px 0;
 }
 
@@ -134,35 +134,31 @@ button.small { font-size: 0.85rem; padding: 8px 12px; background: #34344e; }
 .map { height: 300px; border-radius: 12px; flex-shrink: 0; }
 .map.grow { flex: none; height: 50dvh; border-radius: 0; min-height: 200px; }
 
-/* Lobby (create-game) screen — everything scoped here 3x, so nothing on
-   other screens (home, game, meeting, end) is affected. Left #btn-start out
-   of this pass since it was already deliberately enlarged earlier. */
-#screen-lobby h2 { font-size: 4.5rem; }
-#screen-lobby h3 { font-size: 3.5rem; }
-#screen-lobby .hint { font-size: 2.55rem; }
-#screen-lobby .tab-toggle { font-size: 3.15rem; padding: 42px; gap: 24px; }
-#screen-lobby .pill { font-size: 2.4rem; padding: 6px 30px; }
-#screen-lobby input { font-size: 3.15rem; padding: 42px; }
-#screen-lobby button { font-size: 3.15rem; padding: 42px; }
-#screen-lobby button.small { font-size: 2.55rem; padding: 24px 36px; }
-#screen-lobby .card { padding: 36px; gap: 24px; }
-/* flex-wrap + overflow-wrap let a long label drop the input to its own line
-   instead of forcing the whole row (and everything below it) to overflow
-   horizontally — a fixed-width input next to 2.7rem label text doesn't fit
-   side-by-side on a phone-width screen otherwise. */
-#screen-lobby .setting-row { gap: 30px; flex-wrap: wrap; }
-#screen-lobby .setting-row label { font-size: 2.7rem; min-width: 0; overflow-wrap: break-word; }
-#screen-lobby .setting-row input { width: 270px; max-width: 100%; padding: 24px; }
-#screen-lobby .setting-row input[type="checkbox"] { width: 66px; height: 66px; }
-/* flex-wrap so Draw/Finish/Clear drop to their own line instead of
-   overflowing — at 2.55rem button text, two of these side by side no longer
-   fit a phone-width screen even after shrinking. */
-#screen-lobby .join-row { gap: 30px; flex-wrap: wrap; }
+/* Lobby (create-game) screen — everything scoped here, so nothing on other
+   screens (home, game, meeting, end) is affected. This used to multiply
+   every value here by a flat 3x, which made the lobby massively taller than
+   one screen; scaled back down to a much more modest bump over the plain
+   (unscoped) button/input/etc. rules above — comfortably readable without
+   forcing constant scrolling just to reach the Start button. */
+#screen-lobby h2 { font-size: 2rem; }
+#screen-lobby h3 { font-size: 1.5rem; }
+#screen-lobby .hint { font-size: 1.1rem; }
+#screen-lobby .tab-toggle { font-size: 1.3rem; padding: 18px; gap: 10px; }
+#screen-lobby .pill { font-size: 1rem; padding: 4px 14px; }
+#screen-lobby input { font-size: 1.3rem; padding: 18px; }
+#screen-lobby button { font-size: 1.3rem; padding: 18px; }
+#screen-lobby button.small { font-size: 1.1rem; padding: 12px 18px; }
+#screen-lobby .card { padding: 16px; gap: 10px; }
+#screen-lobby .setting-row { gap: 12px; flex-wrap: wrap; }
+#screen-lobby .setting-row label { font-size: 1.15rem; min-width: 0; overflow-wrap: break-word; }
+#screen-lobby .setting-row input { width: 110px; max-width: 100%; padding: 10px; }
+#screen-lobby .setting-row input[type="checkbox"] { width: 28px; height: 28px; }
+#screen-lobby .join-row { gap: 12px; flex-wrap: wrap; }
 #screen-lobby .join-row button { flex: 1 1 100%; }
-#screen-lobby .player-row { font-size: 2.7rem; gap: 24px; }
-#screen-lobby .player-row .dot { width: 27px; height: 27px; }
-#screen-lobby .player-row .dead-tag, #screen-lobby .player-row .host-tag { font-size: 2.4rem; }
-#screen-lobby #lobby-map { height: 900px; }
+#screen-lobby .player-row { font-size: 1.15rem; gap: 10px; }
+#screen-lobby .player-row .dot { width: 12px; height: 12px; }
+#screen-lobby .player-row .dead-tag, #screen-lobby .player-row .host-tag { font-size: 1rem; }
+#screen-lobby #lobby-map { height: 420px; }
 
 /* Game screen */
 #topbar {
@@ -174,7 +170,7 @@ button.small { font-size: 0.85rem; padding: 8px 12px; background: #34344e; }
   justify-content: space-between;
 }
 .chip {
-  font-size: 2.3rem;
+  font-size: 1.1rem;
   font-weight: 700;
   padding: 8px 12px;
   border-radius: 999px;
@@ -230,10 +226,10 @@ button.small { font-size: 0.85rem; padding: 8px 12px; background: #34344e; }
 .task-row.expanded { flex: none; }
 .task-row.done { opacity: 0.5; }
 .task-row { cursor: pointer; flex-wrap: wrap; }
-.task-row .task-name { flex: 1; min-width: 0; overflow-wrap: break-word; font-size: 2.2rem; font-weight: 600; }
+.task-row .task-name { flex: 1; min-width: 0; overflow-wrap: break-word; font-size: 1.1rem; font-weight: 600; }
 .task-row .task-dist { color: var(--muted); font-size: 0.85rem; flex: none; }
 .task-actions { display: flex; flex-wrap: wrap; gap: 6px; width: 100%; margin-top: 8px; }
-.task-actions button { flex: 1 1 40%; min-width: 0; min-height: 72px; padding: 10px 4px; font-size: 2rem; background: #34344e; }
+.task-actions button { flex: 1 1 40%; min-width: 0; min-height: 48px; padding: 10px 4px; font-size: 1rem; background: #34344e; }
 #panel { max-width: 100%; overflow-x: hidden; }
 .task-actions button.loc { background: var(--red); }
 .task-actions button.go { background: var(--green); color: #08210f; }
@@ -249,10 +245,10 @@ button.small { font-size: 0.85rem; padding: 8px 12px; background: #34344e; }
    from clipping), so the button can grow but never shrinks below its text. */
 #btn-callvote, #btn-seelocation, #btn-blocklocation { flex: 5 1 0; }
 
-#btn-callvote, #btn-seelocation, #btn-blocklocation { font-size: 2.2rem; font-weight: 600; padding: 16px; }
+#btn-callvote, #btn-seelocation, #btn-blocklocation { font-size: 1.2rem; font-weight: 600; padding: 14px; }
 
 /* Kill button matches the same text scale as tasks/power buttons. */
-#kill-panel button { font-size: 2.2rem; font-weight: 600; min-height: 72px; padding: 16px; }
+#kill-panel button { font-size: 1.2rem; font-weight: 600; min-height: 56px; padding: 14px; }
 
 .banner {
   border-radius: 10px;
@@ -313,7 +309,7 @@ button.small { font-size: 0.85rem; padding: 8px 12px; background: #34344e; }
 #panel { scroll-behavior: smooth; }
 
 /* Meeting */
-.timer { font-size: 2rem; text-align: center; font-weight: 700; }
+.timer { font-size: 1.5rem; text-align: center; font-weight: 700; }
 #vote-list { display: flex; flex-direction: column; gap: 8px; }
 #vote-list button { display: flex; justify-content: space-between; background: var(--card); }
 #vote-list button.selected { background: var(--accent); }
@@ -338,21 +334,20 @@ button.small { font-size: 0.85rem; padding: 8px 12px; background: #34344e; }
   width: min(90vw, 380px);
 }
 
-/* Role card — 3x the original title/sub/button sizes, but the title ("IMPOSTOR"/
-   "CREWMATE") is one unbreakable word, so a flat 6rem overflows a phone
-   screen with no way to wrap. clamp() caps it to whatever actually fits the
-   viewport width while still scaling up on wider screens. 15vw/6rem measured
-   as actually overflowing (forcing an ugly mid-word break) on real phone
-   widths from 360-430px; 12vw/5rem leaves a comfortable margin at all of them. */
-#role-modal-title { font-size: clamp(2.2rem, 12vw, 5rem); line-height: 1.1; overflow-wrap: break-word; }
-#role-modal-sub { font-size: 3rem; line-height: 1.3; }
-#role-modal-ok { font-size: 3.15rem; padding: 42px; }
+/* Role card — big and dramatic for the reveal moment, but no longer 3x'd.
+   The title ("IMPOSTOR"/"CREWMATE") is one unbreakable word, so a flat
+   size can overflow a phone screen with no way to wrap; clamp() caps it to
+   whatever actually fits the viewport width while still scaling up on wider
+   screens. */
+#role-modal-title { font-size: clamp(1.8rem, 10vw, 3.5rem); line-height: 1.1; overflow-wrap: break-word; }
+#role-modal-sub { font-size: 1.3rem; line-height: 1.4; }
+#role-modal-ok { font-size: 1.5rem; padding: 20px; }
 
-/* Kill screen — same full-screen treatment as the role card. */
-#kill-modal-title { font-size: clamp(2.2rem, 10vw, 4.5rem); line-height: 1.2; overflow-wrap: break-word; color: #ff4757; }
-#kill-modal-ok { font-size: 3.15rem; padding: 42px; }
+/* Kill screen — same treatment as the role card. */
+#kill-modal-title { font-size: clamp(1.8rem, 9vw, 3.2rem); line-height: 1.2; overflow-wrap: break-word; color: #ff4757; }
+#kill-modal-ok { font-size: 1.5rem; padding: 20px; }
 
-/* Block Location alert — big and unmissable like the modals above, but never
+/* Block Location alert — bold and unmissable like the modals above, but never
    traps input: everyone still needs to move during the 2-minute closure, so
    it fades on its own (and a tap dismisses it early) instead of needing "Got it". */
 #block-banner {
@@ -367,9 +362,9 @@ button.small { font-size: 0.85rem; padding: 8px 12px; background: #34344e; }
   padding: 24px;
 }
 #block-banner-inner { width: min(90vw, 380px); }
-#block-banner-title { font-size: clamp(2rem, 9vw, 3.6rem); font-weight: 800; color: #ff4757; line-height: 1.2; overflow-wrap: break-word; }
-#block-banner-name { font-size: 2.2rem; font-weight: 600; margin-top: 12px; overflow-wrap: break-word; }
-#block-banner-sub { font-size: 1.6rem; color: var(--muted); margin-top: 8px; }
+#block-banner-title { font-size: clamp(1.5rem, 7vw, 2.4rem); font-weight: 800; color: #ff4757; line-height: 1.2; overflow-wrap: break-word; }
+#block-banner-name { font-size: 1.4rem; font-weight: 600; margin-top: 12px; overflow-wrap: break-word; }
+#block-banner-sub { font-size: 1.1rem; color: var(--muted); margin-top: 8px; }
 
 /* End-game-early button — pinned to the very bottom-right of the screen,
    host-only (toggled in app.js), semi-transparent so it doesn't dominate the
@@ -456,19 +451,19 @@ button.small { font-size: 0.85rem; padding: 8px 12px; background: #34344e; }
   padding: 24px 16px;
   background: #12121f;
 }
-/* Roughly triple the original button sizes, but clamped to a share of the
-   viewport width so the shutter + flip button + gaps never overflow a real
-   phone screen — #camera-stage is flex:1, so it automatically shrinks to
-   whatever's left once this control bar grows. */
+/* Comfortably tappable, clamped to a share of the viewport width so the
+   shutter + flip button + gaps never overflow a real phone screen —
+   #camera-stage is flex:1, so it automatically shrinks to whatever's left
+   once this control bar grows. */
 #camera-shutter {
-  width: clamp(84px, 40vw, 252px);
-  height: clamp(84px, 40vw, 252px);
+  width: clamp(56px, 18vw, 96px);
+  height: clamp(56px, 18vw, 96px);
   border-radius: 50%;
   background: #fff;
   border: 6px solid var(--accent);
   padding: 0;
 }
-.round, .round-spacer { width: clamp(60px, 26vw, 180px); height: clamp(60px, 26vw, 180px); font-size: clamp(1.8rem, 4vw, 3.5rem); }
+.round, .round-spacer { width: clamp(44px, 12vw, 72px); height: clamp(44px, 12vw, 72px); font-size: clamp(1.1rem, 3vw, 1.6rem); }
 .round { background: #34344e; border-radius: 50%; padding: 0; }
 .round-spacer { visibility: hidden; }
 #camera-review {
@@ -479,22 +474,24 @@ button.small { font-size: 0.85rem; padding: 8px 12px; background: #34344e; }
 }
 #camera-review button { flex: 1; }
 
-/* Dialog — box and text sized 2/3 of the prior 4x pass (still bigger than
-   the original) — Explain popup uses this same dialog. Capped to the
-   viewport with its own scrollbar so a long explanation can never overflow
-   off-screen. */
+/* Dialog — used for confirmations ("Remove task X?", "Are you sure you
+   completed this?") and the task Explain popup. Capped to the viewport with
+   its own scrollbar so a long explanation can never overflow off-screen. */
+/* Width was previously narrowed to fight wrapping against the old 2.8rem
+   text; now that the text is a normal reading size, a standard wide mobile
+   dialog reads better than staying narrow. */
 #dialog .modal-inner {
   text-align: left;
   gap: 12px;
-  width: min(64vw, 600px);
+  width: min(88vw, 420px);
   padding: 21px;
   max-height: 90dvh;
   overflow-y: auto;
 }
-#dialog p { font-weight: 600; font-size: 2.8rem; line-height: 1.2; overflow-wrap: break-word; }
-#dialog-body { color: var(--text); font-weight: 400; white-space: pre-wrap; font-size: 2.8rem; line-height: 1.3; overflow-wrap: break-word; }
+#dialog p { font-weight: 600; font-size: 1.3rem; line-height: 1.3; overflow-wrap: break-word; }
+#dialog-body { color: var(--text); font-weight: 400; white-space: pre-wrap; font-size: 1.15rem; line-height: 1.4; overflow-wrap: break-word; }
 /* OK button text matches the explanation's font size. */
-#dialog .join-row button { flex: 1; padding: 20px; font-size: 2.8rem; }
+#dialog .join-row button { flex: 1; padding: 16px; font-size: 1.2rem; }
 #dialog-cancel { background: #34344e; }
 
 /* Toast */
