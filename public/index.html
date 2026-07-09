@@ -201,6 +201,17 @@
   </div>
 </div>
 
+<!-- Public ejection reveal: everyone sees this the moment a vote ejects
+     someone who wasn't the impostor. Stays up until dismissed (no auto-hide
+     like the block banner), same pattern as kill-modal/role-modal. -->
+<div id="eject-modal" class="modal hidden">
+  <div class="modal-inner">
+    <h1 id="eject-modal-title"></h1>
+    <p id="eject-modal-sub"></p>
+    <button id="eject-modal-ok" class="big">Got it</button>
+  </div>
+</div>
+
 <!-- Big, auto-dismissing alert for a road closing off. Unlike kill-modal it
      doesn't block play (tap anywhere, or it fades on its own) since everyone
      needs to keep moving during the 2-minute closure. -->

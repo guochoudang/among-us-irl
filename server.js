@@ -527,6 +527,8 @@ function doTally(room) {
   }
 
   let text;
+  let ejectedName = null;
+  let ejectedWasImpostor = null;
   if (!best || tied || best === 'skip' || bestCount === 0) {
     text = 'Nobody was ejected.';
   } else {
@@ -534,8 +536,13 @@ function doTally(room) {
     ejected.alive = false;
     ejected.ejected = true;
     text = `${ejected.name} was ejected.`;
+    // Public reveal, same as classic Among Us ejection screens — the ejected
+    // player is already out of the round, so their role no longer needs to
+    // stay secret, and knowing it is exactly what informs the crew's next move.
+    ejectedName = ejected.name;
+    ejectedWasImpostor = ejected.role === 'impostor';
   }
-  room.lastVote = { text, counts: namedCounts, at: now() };
+  room.lastVote = { text, counts: namedCounts, at: now(), ejectedName, ejectedWasImpostor };
   room.meeting = null;
 
   const winner = checkWin(room);

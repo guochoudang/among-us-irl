@@ -347,6 +347,12 @@ button.small { font-size: 0.85rem; padding: 8px 12px; background: #34344e; }
 #kill-modal-title { font-size: clamp(1.8rem, 9vw, 3.2rem); line-height: 1.2; overflow-wrap: break-word; color: #ff4757; }
 #kill-modal-ok { font-size: 1.5rem; padding: 20px; }
 
+/* Public ejection reveal — same treatment as the role/kill cards: big name
+   for the headline, smaller sub-line for the impostor-or-not reveal. */
+#eject-modal-title { font-size: clamp(1.6rem, 8vw, 2.8rem); line-height: 1.2; overflow-wrap: break-word; }
+#eject-modal-sub { font-size: 1.3rem; line-height: 1.4; }
+#eject-modal-ok { font-size: 1.5rem; padding: 20px; }
+
 /* Block Location alert — bold and unmissable like the modals above, but never
    traps input: everyone still needs to move during the 2-minute closure, so
    it fades on its own (and a tap dismisses it early) instead of needing "Got it". */

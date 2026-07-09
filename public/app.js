@@ -1775,13 +1775,24 @@ function renderEnd() {
   $('btn-again').classList.toggle('hidden', !state.isHost);
 }
 
-// vote result flash when returning from a meeting
+// vote result flash when returning from a meeting. An ejection that wasn't
+// the impostor gets its own big, stay-up-until-dismissed reveal (matching
+// classic Among Us) instead of a toast — everyone sees it, since the ejected
+// player is already out of the round and their role no longer needs secrecy.
+// (An impostor ejection ends the game via checkWin, so phase is already
+// 'ended' by the time this arrives — that's handled by the end screen instead.)
 let lastVoteAt = 0;
 socket.on('state', (s) => {
   if (s.lastVote && s.lastVote.at !== lastVoteAt && s.phase !== 'ended') {
     lastVoteAt = s.lastVote.at;
-    const parts = Object.entries(s.lastVote.counts).map(([n, c]) => `${n}: ${c}`);
-    toast(`${s.lastVote.text}${parts.length ? ' — ' + parts.join(', ') : ''}`, 6000);
+    if (s.lastVote.ejectedName && s.lastVote.ejectedWasImpostor === false) {
+      $('eject-modal-title').textContent = `${s.lastVote.ejectedName} was ejected.`;
+      $('eject-modal-sub').textContent = `${s.lastVote.ejectedName} was not the impostor.`;
+      $('eject-modal').classList.remove('hidden');
+    } else {
+      const parts = Object.entries(s.lastVote.counts).map(([n, c]) => `${n}: ${c}`);
+      toast(`${s.lastVote.text}${parts.length ? ' — ' + parts.join(', ') : ''}`, 6000);
+    }
   }
 });
 
@@ -1894,6 +1905,7 @@ $('kill-modal-ok').onclick = () => {
 };
 $('redzone-modal-ok').onclick = () => $('redzone-modal').classList.add('hidden');
 $('ghost-modal-ok').onclick = () => $('ghost-modal').classList.add('hidden');
+$('eject-modal-ok').onclick = () => $('eject-modal').classList.add('hidden');
 $('block-banner').onclick = () => {
   clearTimeout(blockBannerTimer);
   $('block-banner').classList.add('hidden');
