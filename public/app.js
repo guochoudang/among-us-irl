@@ -5,6 +5,24 @@ if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('/sw.js').catch(() => {});
 }
 
+// Some Android browsers launch an installed standalone PWA with a stale
+// zoom level left over from wherever the engine last was, showing the page
+// zoomed in until something forces a recalculation (a manual reload does
+// it, which is the symptom this works around). Rewriting the viewport
+// meta's content — off, then back on a frame later — forces that
+// recalculation immediately on launch and whenever the app is resumed from
+// the background, without the player having to reload by hand.
+function resetZoom() {
+  const vp = document.querySelector('meta[name=viewport]');
+  if (!vp) return;
+  vp.setAttribute('content', 'width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=1, user-scalable=yes');
+  requestAnimationFrame(() => {
+    vp.setAttribute('content', 'width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=1, user-scalable=no');
+  });
+}
+window.addEventListener('pageshow', resetZoom);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) resetZoom(); });
+
 // ---------- identity ----------
 function makeKey() {
   if (window.crypto && crypto.randomUUID) return crypto.randomUUID();

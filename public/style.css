@@ -247,9 +247,9 @@ button.small { font-size: 0.85rem; padding: 8px 12px; background: #34344e; }
    whatever was below it. Leaving min-height unset falls back to the
    automatic content-based floor (same mechanism that already keeps task rows
    from clipping), so the button can grow but never shrinks below its text. */
-#btn-callvote, #btn-seelocation { flex: 5 1 0; }
+#btn-callvote, #btn-seelocation, #btn-blocklocation { flex: 5 1 0; }
 
-#btn-callvote, #btn-seelocation { font-size: 2.2rem; font-weight: 600; padding: 16px; }
+#btn-callvote, #btn-seelocation, #btn-blocklocation { font-size: 2.2rem; font-weight: 600; padding: 16px; }
 
 /* Kill button matches the same text scale as tasks/power buttons. */
 #kill-panel button { font-size: 2.2rem; font-weight: 600; min-height: 72px; padding: 16px; }
