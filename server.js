@@ -30,6 +30,7 @@ const DEFAULT_SETTINGS = {
   meetingCallRange: 100, // how close to a meeting-call spot you must be to call an emergency meeting
   ghostChatCooldown: 60, // wait between ghost hint messages (Troll/Helper), per player
   ghostRolesEnabled: true, // Troll/Helper ghost roles + their private hint DMs, as one package
+  taskDisbursementEnabled: false, // hand a dead player's unfinished tasks to a living crewmate
 };
 
 const SETTING_LIMITS = {
@@ -592,7 +593,9 @@ function tryKill(room, actor, targetKey) {
   }
   // No body is pinned to the map. The victim physically stays put, and reports
   // key off their phone's live position instead of a frozen (GPS-inaccurate) spot.
-  disburseTasks(room, target); // hand copies of their tasks to living crew
+  if (room.settings.taskDisbursementEnabled) {
+    disburseTasks(room, target); // hand copies of their tasks to living crew
+  }
   actor.cooldownUntil = now() + room.settings.killCooldown * 1000;
   const winner = checkWin(room);
   if (winner) endGame(room, winner);
@@ -1138,6 +1141,7 @@ io.on('connection', (socket) => {
     }
     if (typeof partial.timerAutoStart === 'boolean') room.settings.timerAutoStart = partial.timerAutoStart;
     if (typeof partial.ghostRolesEnabled === 'boolean') room.settings.ghostRolesEnabled = partial.ghostRolesEnabled;
+    if (typeof partial.taskDisbursementEnabled === 'boolean') room.settings.taskDisbursementEnabled = partial.taskDisbursementEnabled;
     broadcast(room);
   });
 

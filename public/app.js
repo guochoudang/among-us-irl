@@ -555,11 +555,16 @@ function showBlockBanner(b) {
   blockBannerTimer = setTimeout(() => $('block-banner').classList.add('hidden'), 6000);
 }
 
-// Keeps the map's furthest-zoomed-out view pinned to the play area (the
-// "fixed borders" the host already knows), while still letting a player zoom
-// in and pan around inside them. Called right after defaultView() so the
-// zoom level fitBounds just landed on becomes the floor you can't zoom past,
-// and dragging/pinching past the area edge snaps back instead of scrolling away.
+// Pins the meeting map's furthest-zoomed-out view to the play area, since
+// that map is only ever shown briefly during a vote and re-inits every time
+// (see initMeetingMap). The main game map used to get this same treatment,
+// but hard-locking pan/zoom to a rectangle computed once at init time made it
+// fragile — the lock (and the map's cached tile layout) could go stale
+// whenever the map's container was hidden behind another screen and shown
+// again (e.g. after a meeting), so the game map now just uses defaultView()
+// for its initial framing and otherwise behaves like a normal, freely
+// pannable/zoomable map. The play area is still visible to everyone via the
+// green polygon outline drawn by renderArea().
 function lockMapBounds(map) {
   if (!state || !state.area || state.area.length < 3) return;
   const bounds = L.latLngBounds(state.area.map((p) => [p.lat, p.lng])).pad(0.03);
@@ -580,10 +585,8 @@ function initGameMap() {
     doubleClickZoom: true,
     boxZoom: false,
     keyboard: false,
-    maxBoundsViscosity: 1.0,
   });
   defaultView(gameMap);
-  lockMapBounds(gameMap);
   tiles().addTo(gameMap);
   taskLayer = L.layerGroup().addTo(gameMap);
   botLayer = L.layerGroup().addTo(gameMap);
@@ -911,6 +914,8 @@ function fillSettingsForm() {
   if (autoStartBox && document.activeElement !== autoStartBox) autoStartBox.checked = state.settings.timerAutoStart;
   const ghostRolesBox = $('set-ghostRolesEnabled');
   if (ghostRolesBox && document.activeElement !== ghostRolesBox) ghostRolesBox.checked = state.settings.ghostRolesEnabled;
+  const taskDisbursementBox = $('set-taskDisbursementEnabled');
+  if (taskDisbursementBox && document.activeElement !== taskDisbursementBox) taskDisbursementBox.checked = state.settings.taskDisbursementEnabled;
 }
 
 // ---------- main render ----------
@@ -942,6 +947,12 @@ function render() {
     seeLocationShownUntil = 0; // fresh game, allow a new reveal to draw
     if (seeLocationLayer) seeLocationLayer.clearLayers();
   }
+  // The game map's container sits behind #screen-meeting (display:none) for
+  // the whole meeting, which leaves Leaflet's cached tile layout stale — this
+  // was the "map doesn't reload properly after a meeting" bug. Fix it in
+  // place (no refit, so a player's pan/zoom isn't yanked around) whenever the
+  // game screen comes back into view.
+  const gameMapNeedsRefresh = state.phase === 'playing' && lastPhase === 'meeting';
   lastPhase = state.phase;
 
   // Kill screen: covers the whole screen the moment you've been killed (not
@@ -964,7 +975,7 @@ function render() {
   );
 
   if (state.phase === 'lobby') renderLobby();
-  else if (state.phase === 'playing') renderGame();
+  else if (state.phase === 'playing') renderGame(gameMapNeedsRefresh);
   else if (state.phase === 'meeting') renderMeeting();
   else if (state.phase === 'ended') renderEnd();
 }
@@ -1011,7 +1022,7 @@ function renderLobby() {
   }
 }
 
-function renderGame() {
+function renderGame(needsRefresh) {
   showScreen('game');
   keepAwake();
   initGameMap();
@@ -1024,8 +1035,11 @@ function renderGame() {
       if (!gameMap) return;
       gameMap.invalidateSize();
       defaultView(gameMap);
-      lockMapBounds(gameMap);
     }, 50);
+  } else if (needsRefresh) {
+    // Returning from a meeting: same map, same view, just needs Leaflet to
+    // notice its container is visible again (see the note above lockMapBounds).
+    setTimeout(() => gameMap && gameMap.invalidateSize(), 50);
   }
   updateMeMarker();
   renderGameTasks();
@@ -1695,6 +1709,7 @@ $('btn-start').onclick = () => socket.emit('start');
 $('btn-addbot').onclick = () => socket.emit('addBot');
 $('set-timerAutoStart').onchange = (e) => socket.emit('settings', { timerAutoStart: e.target.checked });
 $('set-ghostRolesEnabled').onchange = (e) => socket.emit('settings', { ghostRolesEnabled: e.target.checked });
+$('set-taskDisbursementEnabled').onchange = (e) => socket.emit('settings', { taskDisbursementEnabled: e.target.checked });
 
 $('round-chip').onclick = () => {
   if (!state || !state.isHost) return;
