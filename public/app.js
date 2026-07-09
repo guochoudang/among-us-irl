@@ -1,5 +1,10 @@
 /* global io, L */
 
+// PWA install support only — no caching (see sw.js for why).
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js').catch(() => {});
+}
+
 // ---------- identity ----------
 function makeKey() {
   if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
