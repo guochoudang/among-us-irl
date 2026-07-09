@@ -10,9 +10,8 @@ if ('serviceWorker' in navigator) {
 // zoomed in until something forces a recalculation (a manual reload does
 // it, which is the symptom this works around). Rewriting the viewport
 // meta's content — off, then back on a frame later — forces that
-// recalculation immediately on launch and whenever the app is resumed from
-// the background, without the player having to reload by hand.
-function resetZoom() {
+// recalculation.
+function forceZoomRecalc() {
   const vp = document.querySelector('meta[name=viewport]');
   if (!vp) return;
   vp.setAttribute('content', 'width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=1, user-scalable=yes');
@@ -20,8 +19,30 @@ function resetZoom() {
     vp.setAttribute('content', 'width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=1, user-scalable=no');
   });
 }
-window.addEventListener('pageshow', resetZoom);
-document.addEventListener('visibilitychange', () => { if (!document.hidden) resetZoom(); });
+// Only actually touch anything if the page is genuinely rendering zoomed in
+// (visualViewport.scale away from 1) — cheap to check, and avoids poking the
+// DOM on every trigger when nothing's wrong. Falls back to just always
+// correcting on browsers old enough to lack the Visual Viewport API.
+function checkAndFixZoom() {
+  if (!window.visualViewport || Math.abs(window.visualViewport.scale - 1) > 0.02) {
+    forceZoomRecalc();
+  }
+}
+// The bad zoom can show up slightly after any of these fire (the OS/engine
+// applies its stale scale asynchronously), so check at every plausible
+// trigger point AND a couple of short delays after each, rather than trusting
+// any single moment to be late enough.
+function checkZoomSoon() {
+  checkAndFixZoom();
+  setTimeout(checkAndFixZoom, 300);
+  setTimeout(checkAndFixZoom, 1000);
+}
+window.addEventListener('load', checkZoomSoon);
+window.addEventListener('pageshow', checkZoomSoon);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) checkZoomSoon(); });
+if (window.visualViewport) {
+  window.visualViewport.addEventListener('resize', checkAndFixZoom);
+}
 
 // ---------- identity ----------
 function makeKey() {
