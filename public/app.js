@@ -37,12 +37,16 @@ function checkZoomSoon() {
   setTimeout(checkAndFixZoom, 300);
   setTimeout(checkAndFixZoom, 1000);
 }
+// Deliberately NOT a live window.visualViewport 'resize' listener: that would
+// fire (and "correct" zoom back to 1) on every scale change for the entire
+// time the app is open, including a player's own legitimate pinch-to-zoom on
+// the map — which made zooming out feel broken, since any zoom got undone a
+// moment later. The launch-time bug only ever needs checking right after one
+// of these actual resume events, each already re-checked a couple of times
+// shortly after in case the stale zoom applies late.
 window.addEventListener('load', checkZoomSoon);
 window.addEventListener('pageshow', checkZoomSoon);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) checkZoomSoon(); });
-if (window.visualViewport) {
-  window.visualViewport.addEventListener('resize', checkAndFixZoom);
-}
 
 // ---------- identity ----------
 function makeKey() {
