@@ -19,6 +19,12 @@
 
 <div id="toast" class="hidden"></div>
 
+<!-- Shown when the server has a newer build than what's currently loaded
+     (see the /version poll in app.js) — installed PWAs have no reload
+     button, so without this a standalone app can keep running old code
+     indefinitely after an update ships. -->
+<button id="update-banner" class="hidden">🔄 New version available — tap to reload</button>
+
 <section id="screen-home" class="screen">
   <h1 class="title">Neighborhood<br>Among Us</h1>
   <input id="name-input" placeholder="Your name" maxlength="16" autocomplete="off">

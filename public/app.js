@@ -95,6 +95,28 @@ $('btn-install-app').onclick = async () => {
   $('btn-install-app').classList.add('hidden');
 };
 
+// An installed standalone PWA has no reload button, and Android can keep it
+// running the exact same in-memory JS indefinitely across being switched
+// away from and back to (that's not a real page navigation, so a fresh
+// deploy's code never gets fetched) — someone can end up testing a build
+// from hours ago without any sign anything's stale. /version fingerprints
+// the currently-running server process (it restarts on every deploy), so a
+// mismatch here means a newer build shipped since this page was loaded.
+let knownServerStartedAt = null;
+async function checkForNewVersion() {
+  try {
+    const res = await fetch('/version', { cache: 'no-store' });
+    const { startedAt } = await res.json();
+    if (knownServerStartedAt === null) knownServerStartedAt = startedAt;
+    else if (startedAt !== knownServerStartedAt) $('update-banner').classList.remove('hidden');
+  } catch (e) { /* offline, or server mid-restart — just retry next time */ }
+}
+checkForNewVersion();
+setInterval(checkForNewVersion, 60000);
+window.addEventListener('pageshow', checkForNewVersion);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) checkForNewVersion(); });
+$('update-banner').onclick = () => location.reload();
+
 // Solo-test mode helpers
 let fakeMode = false;   // host spoofed their own location by tapping the map
 let placingMe = false;  // next map tap sets the host's fake location

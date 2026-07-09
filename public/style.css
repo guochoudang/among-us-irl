@@ -515,3 +515,23 @@ button.small { font-size: 0.85rem; padding: 8px 12px; background: #34344e; }
   max-width: 90vw;
   text-align: center;
 }
+
+/* Update-available banner — same idea as the toast, but a persistent, tappable
+   pill (not auto-dismissed) since a stale-code notice is worth acting on,
+   not glancing past. Sits below where the toast appears so the two never overlap. */
+#update-banner {
+  position: fixed;
+  top: 60px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--accent);
+  color: #fff;
+  font-weight: 600;
+  font-size: 0.95rem;
+  padding: 10px 18px;
+  border-radius: 999px;
+  border: none;
+  z-index: 3000;
+  max-width: 90vw;
+  text-align: center;
+}

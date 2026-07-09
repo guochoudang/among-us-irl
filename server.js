@@ -10,6 +10,17 @@ const io = new Server(server);
 // cached copy from an earlier session on the same tunnel link.
 app.use(express.static(path.join(__dirname, 'public'), { setHeaders: (res) => res.set('Cache-Control', 'no-store') }));
 
+// Every deploy restarts this process, so its start time works as a cheap
+// version fingerprint — the installed PWA has no reload button, and Android
+// can keep a standalone app's old JS running in memory indefinitely across
+// switching away and back (not a real navigation), so the client polls this
+// to notice when a newer build is running on the server and prompt a reload.
+const SERVER_STARTED_AT = Date.now();
+app.get('/version', (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.json({ startedAt: SERVER_STARTED_AT });
+});
+
 const PORT = process.env.PORT || 3000;
 const MAX_PLAYERS = 10;
 
