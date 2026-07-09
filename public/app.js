@@ -879,6 +879,32 @@ const SETTINGS_META = [
 ];
 let settingsBuilt = false;
 
+// Settings inputs re-sync from state.settings on every render — and renders
+// happen every ~2s even in the lobby, because GPS position updates broadcast
+// unconditionally regardless of phase (see the setInterval below that emits
+// 'pos'). Guarding a resync with "is this input currently focused" isn't
+// reliable on mobile (a checkbox tap doesn't always hold focus the way a
+// mouse click does), so a broadcast that's still in flight from before the
+// host's edit landed could otherwise snap a checkbox/number right back.
+// Instead, once the host changes a setting, hold that value locally and keep
+// showing it — ignoring incoming state — until the server's own broadcast
+// confirms the same value, at which point trusting state again is safe.
+const pendingSettingOverride = {};
+function settingChanged(key, value) {
+  pendingSettingOverride[key] = value;
+  socket.emit('settings', { [key]: value });
+}
+// True if a control for `key` should keep showing its own pending value
+// rather than being overwritten by state.settings right now.
+function hasPendingSetting(key) {
+  if (!(key in pendingSettingOverride)) return false;
+  if (state.settings[key] === pendingSettingOverride[key]) {
+    delete pendingSettingOverride[key]; // server caught up — safe to trust state again
+    return false;
+  }
+  return true;
+}
+
 function buildSettingsForm() {
   if (settingsBuilt) return;
   settingsBuilt = true;
@@ -897,7 +923,7 @@ function buildSettingsForm() {
     const inp = document.createElement('input');
     inp.type = 'number';
     inp.id = 'set-' + key;
-    inp.onchange = () => socket.emit('settings', { [key]: Number(inp.value) });
+    inp.onchange = () => settingChanged(key, Number(inp.value));
     row.append(lab, inp);
     form.append(row);
     if (key === 'roundLength') {
@@ -913,7 +939,7 @@ function buildSettingsForm() {
 function fillSettingsForm() {
   for (const [key] of SETTINGS_META) {
     const inp = $('set-' + key);
-    if (inp && document.activeElement !== inp) inp.value = state.settings[key];
+    if (inp && document.activeElement !== inp && !hasPendingSetting(key)) inp.value = state.settings[key];
   }
   const note = $('autoscale-note');
   if (note) {
@@ -922,11 +948,11 @@ function fillSettingsForm() {
       : 'Tasks per player and round time are locked in by hand — tap "Use recommended" to go back to auto.';
   }
   const autoStartBox = $('set-timerAutoStart');
-  if (autoStartBox && document.activeElement !== autoStartBox) autoStartBox.checked = state.settings.timerAutoStart;
+  if (autoStartBox && document.activeElement !== autoStartBox && !hasPendingSetting('timerAutoStart')) autoStartBox.checked = state.settings.timerAutoStart;
   const ghostRolesBox = $('set-ghostRolesEnabled');
-  if (ghostRolesBox && document.activeElement !== ghostRolesBox) ghostRolesBox.checked = state.settings.ghostRolesEnabled;
+  if (ghostRolesBox && document.activeElement !== ghostRolesBox && !hasPendingSetting('ghostRolesEnabled')) ghostRolesBox.checked = state.settings.ghostRolesEnabled;
   const taskDisbursementBox = $('set-taskDisbursementEnabled');
-  if (taskDisbursementBox && document.activeElement !== taskDisbursementBox) taskDisbursementBox.checked = state.settings.taskDisbursementEnabled;
+  if (taskDisbursementBox && document.activeElement !== taskDisbursementBox && !hasPendingSetting('taskDisbursementEnabled')) taskDisbursementBox.checked = state.settings.taskDisbursementEnabled;
 }
 
 // ---------- main render ----------
@@ -1109,9 +1135,20 @@ function renderGame(needsRefresh) {
 function renderDeadArea() {
   const you = state.you;
   const area = $('dead-area');
-  area.innerHTML = '';
-  if (you.alive) return;
-  const div = document.createElement('div');
+  if (you.alive) {
+    area.innerHTML = '';
+    return;
+  }
+  // Reuse the existing banner/composer nodes across renders instead of
+  // wiping and rebuilding them every state tick (renders happen every ~2s
+  // even mid-game from GPS pos updates) — rebuilding the ghost composer's
+  // <input> every tick was destroying whatever the player had typed and
+  // stealing focus before they could finish a hint.
+  let div = area.querySelector('.banner');
+  if (!div) {
+    div = document.createElement('div');
+    area.append(div);
+  }
   if (you.ejected) {
     div.className = 'banner info';
     div.textContent = 'You were ejected. Keep quietly finishing your tasks.';
@@ -1123,61 +1160,86 @@ function renderDeadArea() {
     div.id = 'dead-banner';
     div.textContent = 'You are DEAD. Stay where you are and stay quiet. Your tasks were shared with the crew.';
   }
-  area.append(div);
-  if (you.foundDead && you.ghostRole) renderGhostComposer(area);
+  if (you.foundDead && you.ghostRole) {
+    renderGhostComposer(area);
+  } else {
+    const existing = area.querySelector('.ghost-composer');
+    if (existing) existing.remove();
+  }
 }
 
 // Troll/Helper hint composer: the only "chat" a ghost has, and it's not free
 // text — the wording is fixed, the player only fills in a location and picks
 // exactly one living player to DM it to (never a broadcast). One send at a
 // time, then a cooldown (see renderDynamic for the live countdown).
+//
+// Builds its DOM once per container and reuses it on later calls, only
+// diffing the target dropdown's option list — never touching the text input
+// — so a re-render (which happens every ~2s from GPS traffic alone) can't
+// wipe what the player is mid-typing or steal focus out from under them.
 function renderGhostComposer(container) {
-  const wrap = document.createElement('div');
-  wrap.className = 'ghost-composer';
-  const label = document.createElement('p');
-  label.className = 'hint';
-  label.textContent = 'Send a private hint to one living player — you can only fill in who and the location:';
-  wrap.append(label);
-
-  const targetRow = document.createElement('div');
-  targetRow.className = 'ghost-input-row';
-  const targetLabel = document.createElement('span');
-  targetLabel.textContent = 'Send to:';
-  const select = document.createElement('select');
-  select.id = 'ghost-hint-target';
   const living = (state.players || []).filter((p) => !p.dead && p.key !== state.you.key);
-  for (const p of living) {
-    const opt = document.createElement('option');
-    opt.value = p.key;
-    opt.textContent = p.name;
-    select.append(opt);
-  }
-  targetRow.append(targetLabel, select);
-  wrap.append(targetRow);
+  let wrap = container.querySelector('.ghost-composer');
 
-  const row = document.createElement('div');
-  row.className = 'ghost-input-row';
-  const prefix = document.createElement('span');
-  prefix.textContent = 'The imposter is headed toward:';
-  const input = document.createElement('input');
-  input.type = 'text';
-  input.id = 'ghost-hint-input';
-  input.maxLength = 60;
-  input.placeholder = 'e.g. the park';
-  const sendBtn = document.createElement('button');
-  sendBtn.className = 'small';
-  sendBtn.id = 'ghost-hint-send';
-  sendBtn.textContent = 'Send';
-  sendBtn.onclick = () => {
-    if (!living.length) return toast('No living players to send to right now.');
-    const loc = input.value.trim();
-    if (!loc) return toast('Type a location first.');
-    socket.emit('ghostHint', { location: loc, targetKey: select.value });
-    input.value = '';
-  };
-  row.append(prefix, input, sendBtn);
-  wrap.append(row);
-  container.append(wrap);
+  if (!wrap) {
+    wrap = document.createElement('div');
+    wrap.className = 'ghost-composer';
+    const label = document.createElement('p');
+    label.className = 'hint';
+    label.textContent = 'Send a private hint to one living player — you can only fill in who and the location:';
+    wrap.append(label);
+
+    const targetRow = document.createElement('div');
+    targetRow.className = 'ghost-input-row';
+    const targetLabel = document.createElement('span');
+    targetLabel.textContent = 'Send to:';
+    const select = document.createElement('select');
+    select.id = 'ghost-hint-target';
+    targetRow.append(targetLabel, select);
+    wrap.append(targetRow);
+
+    const row = document.createElement('div');
+    row.className = 'ghost-input-row';
+    const prefix = document.createElement('span');
+    prefix.textContent = 'The imposter is headed toward:';
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.id = 'ghost-hint-input';
+    input.maxLength = 60;
+    input.placeholder = 'e.g. the park';
+    const sendBtn = document.createElement('button');
+    sendBtn.className = 'small';
+    sendBtn.id = 'ghost-hint-send';
+    sendBtn.textContent = 'Send';
+    sendBtn.onclick = () => {
+      const stillLiving = (state.players || []).filter((p) => !p.dead && p.key !== state.you.key);
+      if (!stillLiving.length) return toast('No living players to send to right now.');
+      const loc = input.value.trim();
+      if (!loc) return toast('Type a location first.');
+      socket.emit('ghostHint', { location: loc, targetKey: select.value });
+      input.value = '';
+    };
+    row.append(prefix, input, sendBtn);
+    wrap.append(row);
+    container.append(wrap);
+  }
+
+  // Only rebuild the dropdown's options if the actual set of living players
+  // changed, and preserve whichever one was already selected if it's still valid.
+  const select = wrap.querySelector('#ghost-hint-target');
+  const livingKey = living.map((p) => p.key).join(',');
+  if (select.dataset.livingKey !== livingKey) {
+    const prevValue = select.value;
+    select.innerHTML = '';
+    for (const p of living) {
+      const opt = document.createElement('option');
+      opt.value = p.key;
+      opt.textContent = p.name;
+      select.append(opt);
+    }
+    select.dataset.livingKey = livingKey;
+    if (living.some((p) => p.key === prevValue)) select.value = prevValue;
+  }
 }
 
 // Private inbox of ghost hints sent TO this player, shown only on the regular
@@ -1677,8 +1739,11 @@ function renderMeeting() {
       ? 'Vote cast. Waiting for the others…'
       : '';
   const ghostComposerMeeting = $('ghost-composer-meeting');
-  ghostComposerMeeting.innerHTML = '';
-  if (!you.alive && you.foundDead && you.ghostRole) renderGhostComposer(ghostComposerMeeting);
+  if (!you.alive && you.foundDead && you.ghostRole) {
+    renderGhostComposer(ghostComposerMeeting);
+  } else {
+    ghostComposerMeeting.innerHTML = '';
+  }
   renderTestPanel('meeting-test');
   renderDynamic();
 }
@@ -1718,9 +1783,9 @@ socket.on('state', (s) => {
 
 $('btn-start').onclick = () => socket.emit('start');
 $('btn-addbot').onclick = () => socket.emit('addBot');
-$('set-timerAutoStart').onchange = (e) => socket.emit('settings', { timerAutoStart: e.target.checked });
-$('set-ghostRolesEnabled').onchange = (e) => socket.emit('settings', { ghostRolesEnabled: e.target.checked });
-$('set-taskDisbursementEnabled').onchange = (e) => socket.emit('settings', { taskDisbursementEnabled: e.target.checked });
+$('set-timerAutoStart').onchange = (e) => settingChanged('timerAutoStart', e.target.checked);
+$('set-ghostRolesEnabled').onchange = (e) => settingChanged('ghostRolesEnabled', e.target.checked);
+$('set-taskDisbursementEnabled').onchange = (e) => settingChanged('taskDisbursementEnabled', e.target.checked);
 
 $('round-chip').onclick = () => {
   if (!state || !state.isHost) return;
