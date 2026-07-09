@@ -27,6 +27,31 @@ let mapFittedForGame = -1; // counter so the game map's zoom/bounds are (re)fit 
 
 const $ = (id) => document.getElementById(id);
 
+// Chrome/Android normally shows its own install banner automatically, but
+// dismissing (or backing out of) it once makes the browser stop offering it
+// again for a long while. Capturing the event ourselves and driving our own
+// button sidesteps that — the button just stays hidden until the browser
+// tells us installing is possible again. (iOS Safari has no such event at
+// all; there, "Add to Home Screen" from the Share menu is the only route,
+// so the button simply never appears there.)
+let deferredInstallPrompt = null;
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault();
+  deferredInstallPrompt = e;
+  $('btn-install-app').classList.remove('hidden');
+});
+window.addEventListener('appinstalled', () => {
+  deferredInstallPrompt = null;
+  $('btn-install-app').classList.add('hidden');
+});
+$('btn-install-app').onclick = async () => {
+  if (!deferredInstallPrompt) return;
+  deferredInstallPrompt.prompt();
+  await deferredInstallPrompt.userChoice;
+  deferredInstallPrompt = null;
+  $('btn-install-app').classList.add('hidden');
+};
+
 // Solo-test mode helpers
 let fakeMode = false;   // host spoofed their own location by tapping the map
 let placingMe = false;  // next map tap sets the host's fake location
