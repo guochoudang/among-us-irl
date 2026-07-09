@@ -649,8 +649,29 @@ function initGameMap() {
   // guess. ResizeObserver instead fires exactly when the container's real
   // pixel size changes, so this fires right when hiding/showing actually
   // finishes, whatever that takes.
+  //
+  // This is also the ONLY place the map's initial view gets fit (see
+  // mapFittedForGame below) — fitBounds() picks its zoom from the container's
+  // CURRENT pixel size, and #screen-game only just lost its `hidden` class
+  // moments before initGameMap() runs, so on a slow phone the container can
+  // still be its stale (possibly zero) pre-layout size at that exact instant.
+  // A wrong fit computed against a bogus size sticks forever with nothing to
+  // correct it — that's the "starts zoomed in and won't zoom out" bug this
+  // replaces. Fitting only once the container reports a genuine nonzero size
+  // (which ResizeObserver's callback timing guarantees, unlike a guessed
+  // delay) means the very first fit is always against real dimensions.
   if (window.ResizeObserver) {
-    new ResizeObserver(() => gameMap && gameMap.invalidateSize()).observe($('game-map'));
+    new ResizeObserver(() => {
+      if (!gameMap) return;
+      gameMap.invalidateSize();
+      if (mapFittedForGame !== gameCount) {
+        const el = $('game-map');
+        if (el.clientWidth > 0 && el.clientHeight > 0) {
+          mapFittedForGame = gameCount;
+          defaultView(gameMap);
+        }
+      }
+    }).observe($('game-map'));
   }
 }
 
@@ -1010,12 +1031,6 @@ function render() {
     seeLocationShownUntil = 0; // fresh game, allow a new reveal to draw
     if (seeLocationLayer) seeLocationLayer.clearLayers();
   }
-  // The game map's container sits behind #screen-meeting (display:none) for
-  // the whole meeting, which leaves Leaflet's cached tile layout stale — this
-  // was the "map doesn't reload properly after a meeting" bug. Fix it in
-  // place (no refit, so a player's pan/zoom isn't yanked around) whenever the
-  // game screen comes back into view.
-  const gameMapNeedsRefresh = state.phase === 'playing' && lastPhase === 'meeting';
   lastPhase = state.phase;
 
   // Kill screen: covers the whole screen the moment you've been killed (not
@@ -1038,7 +1053,7 @@ function render() {
   );
 
   if (state.phase === 'lobby') renderLobby();
-  else if (state.phase === 'playing') renderGame(gameMapNeedsRefresh);
+  else if (state.phase === 'playing') renderGame();
   else if (state.phase === 'meeting') renderMeeting();
   else if (state.phase === 'ended') renderEnd();
 }
@@ -1085,25 +1100,14 @@ function renderLobby() {
   }
 }
 
-function renderGame(needsRefresh) {
+function renderGame() {
   showScreen('game');
   keepAwake();
   initGameMap();
-  // Only re-fit the view once per new game (not on every state tick) — now
-  // that the map can be zoomed/panned, refitting on every broadcast would
-  // keep yanking a player's view back while they're looking around.
-  if (mapFittedForGame !== gameCount) {
-    mapFittedForGame = gameCount;
-    setTimeout(() => {
-      if (!gameMap) return;
-      gameMap.invalidateSize();
-      defaultView(gameMap);
-    }, 50);
-  } else if (needsRefresh) {
-    // Returning from a meeting: same map, same view, just needs Leaflet to
-    // notice its container is visible again (see the note above lockMapBounds).
-    setTimeout(() => gameMap && gameMap.invalidateSize(), 50);
-  }
+  // The initial fit (once per new game) and the meeting-return tile refresh
+  // both now happen reactively via the ResizeObserver set up in initGameMap —
+  // see the comment there for why a timer-based guess isn't reliable enough
+  // for either of those.
   updateMeMarker();
   renderGameTasks();
   renderArea(gameMap, 'game');
