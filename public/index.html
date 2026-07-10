@@ -67,6 +67,11 @@
       <p class="hint">When on, a killed player's unfinished tasks are immediately copied to a living crewmate — a free hint that a kill just happened. Off by default so dying doesn't automatically tip anyone off.</p>
       <h3>Sabotage</h3>
       <p class="hint">The impostor can trigger Reactor (Bel Aire Court, needs 2 people to fix) or O2 (Leavesley Place, needs 1) on a cooldown. Can't be used while a road is blocked, or vice versa. Durations and cooldown are in the settings above.</p>
+      <div class="setting-row">
+        <label for="set-sabotageDeadCanFix">Dead players can also fix sabotages</label>
+        <input type="checkbox" id="set-sabotageDeadCanFix">
+      </div>
+      <p class="hint">Off by default — only living players can enter the code to fix Reactor/O2. Turn on to let ghosts (found-dead or ejected players) help fix too.</p>
       <h3>Tasks <span id="task-count" class="pill"></span></h3>
       <p class="hint">Tap the map where a task should be, give it a name. Blue dots are your created tasks — tap one to remove it.</p>
       <div id="lobby-map" class="map"></div>

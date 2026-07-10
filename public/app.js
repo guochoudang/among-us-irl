@@ -496,8 +496,9 @@ function renderMeetingLocations(map, which) {
   $('meetingloc-count') && ($('meetingloc-count').textContent = locs.length);
 }
 
-// Fixed sabotage spots on the game map — always visible so everyone knows
-// where Reactor/O2 are, turning red for whichever one is currently active.
+// Sabotage location marker — only shown while a sabotage is actually active
+// (red ring around the spot), offset slightly so it doesn't cover the task
+// dot that already sits at that same location.
 function renderSabotageSpots(map) {
   if (!map || !state) return;
   const spots = state.sabotageSpots || [];
@@ -507,13 +508,13 @@ function renderSabotageSpots(map) {
   lastSabotageSpotHash = hash;
   if (!sabotageSpotLayer) sabotageSpotLayer = L.layerGroup().addTo(map);
   sabotageSpotLayer.clearLayers();
-  for (const s of spots) {
-    const active = s.type === activeType;
-    L.circleMarker([s.lat, s.lng], {
-      radius: active ? 9 : 7, color: '#fff', weight: 1.5,
-      fillColor: active ? '#ff4757' : '#555568', fillOpacity: 1,
-    }).addTo(sabotageSpotLayer).bindTooltip(`${s.name} (${s.label})`);
-  }
+  if (!activeType) return;
+  const s = spots.find((sp) => sp.type === activeType);
+  if (!s) return;
+  const offsetLat = s.lat + 0.00012; // nudge north so the task dot underneath stays visible
+  L.circleMarker([offsetLat, s.lng], {
+    radius: 12, color: '#ff4757', weight: 3, fillOpacity: 0,
+  }).addTo(sabotageSpotLayer).bindTooltip(`${s.name} (${s.label})`);
 }
 
 function updateSegmentDraft() {
@@ -910,7 +911,7 @@ function renderTestPanel(containerId) {
         o2Btn.onclick = act('sabotage', 'o2');
         row.append(o2Btn);
       }
-      if (state.sabotage && (b.alive || b.foundDead || b.ejected)) {
+      if (state.sabotage && (b.alive || ((b.foundDead || b.ejected) && state.settings.sabotageDeadCanFix))) {
         const fixBtn = document.createElement('button');
         fixBtn.textContent = '🛠 Fix sabotage';
         fixBtn.onclick = act('sabotageFix');
@@ -1086,6 +1087,8 @@ function fillSettingsForm() {
   if (ghostRolesBox && document.activeElement !== ghostRolesBox && !hasPendingSetting('ghostRolesEnabled')) ghostRolesBox.checked = state.settings.ghostRolesEnabled;
   const taskDisbursementBox = $('set-taskDisbursementEnabled');
   if (taskDisbursementBox && document.activeElement !== taskDisbursementBox && !hasPendingSetting('taskDisbursementEnabled')) taskDisbursementBox.checked = state.settings.taskDisbursementEnabled;
+  const sabotageDeadCanFixBox = $('set-sabotageDeadCanFix');
+  if (sabotageDeadCanFixBox && document.activeElement !== sabotageDeadCanFixBox && !hasPendingSetting('sabotageDeadCanFix')) sabotageDeadCanFixBox.checked = state.settings.sabotageDeadCanFix;
 }
 
 // ---------- main render ----------
@@ -1405,7 +1408,8 @@ function renderSabotagePanel() {
   let card = container.querySelector('.sabotage-card');
   const needsRebuild = !card
     || card.dataset.sabotageId !== String(sab.id)
-    || card.dataset.fixedByYou !== String(sab.fixedByYou);
+    || card.dataset.fixedByYou !== String(sab.fixedByYou)
+    || card.dataset.youAlive !== String(state.you.alive);
 
   if (needsRebuild) {
     container.innerHTML = '';
@@ -1413,6 +1417,7 @@ function renderSabotagePanel() {
     card.className = 'sabotage-card';
     card.dataset.sabotageId = String(sab.id);
     card.dataset.fixedByYou = String(sab.fixedByYou);
+    card.dataset.youAlive = String(state.you.alive);
 
     const head = document.createElement('div');
     head.className = 'sabotage-head';
@@ -1436,7 +1441,13 @@ function renderSabotagePanel() {
       card.append(locHint);
     }
 
-    if (!sab.fixedByYou) {
+    const deadAndBlocked = !state.you.alive && !state.settings.sabotageDeadCanFix;
+    if (deadAndBlocked) {
+      const blocked = document.createElement('p');
+      blocked.className = 'hint';
+      blocked.textContent = 'Only living players can fix sabotages in this game.';
+      card.append(blocked);
+    } else if (!sab.fixedByYou) {
       const row = document.createElement('div');
       row.className = 'sabotage-input-row';
       const input = document.createElement('input');
@@ -2058,6 +2069,7 @@ $('set-roundTimerEnabled').onchange = (e) => settingChanged('roundTimerEnabled',
 $('set-timerAutoStart').onchange = (e) => settingChanged('timerAutoStart', e.target.checked);
 $('set-ghostRolesEnabled').onchange = (e) => settingChanged('ghostRolesEnabled', e.target.checked);
 $('set-taskDisbursementEnabled').onchange = (e) => settingChanged('taskDisbursementEnabled', e.target.checked);
+$('set-sabotageDeadCanFix').onchange = (e) => settingChanged('sabotageDeadCanFix', e.target.checked);
 
 $('round-chip').onclick = () => {
   if (!state || !state.isHost) return;

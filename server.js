@@ -47,6 +47,7 @@ const DEFAULT_SETTINGS = {
   sabotageReactorDuration: 300, // time to fix Reactor before it auto-wins the impostor the game (5 min)
   sabotageO2Duration: 240,      // same, for O2 (4 min)
   sabotageFixRange: 50,         // farther than this from the sabotage spot, entering the code asks for confirmation
+  sabotageDeadCanFix: false,    // if false (default), only living players can enter the code to fix a sabotage
 };
 
 const SETTING_LIMITS = {
@@ -940,6 +941,7 @@ function trySabotageFix(room, actor, code) {
   if (!room.sabotage) return 'Nothing to fix right now.';
   if (room.phase !== 'playing') return 'Not right now.';
   if (!actor.alive && !actor.ejected && !actor.foundDead) return "You haven't been found yet — stay put.";
+  if (!actor.alive && !room.settings.sabotageDeadCanFix) return 'Only living players can fix sabotages in this game.';
   if (String(code || '').trim() !== room.sabotage.code) return 'Wrong code.';
   if (room.sabotage.fixedBy.includes(actor.key)) return "You've already helped fix this one.";
   room.sabotage.fixedBy.push(actor.key);
@@ -1308,6 +1310,7 @@ io.on('connection', (socket) => {
     if (typeof partial.ghostRolesEnabled === 'boolean') room.settings.ghostRolesEnabled = partial.ghostRolesEnabled;
     if (typeof partial.taskDisbursementEnabled === 'boolean') room.settings.taskDisbursementEnabled = partial.taskDisbursementEnabled;
     if (typeof partial.roundTimerEnabled === 'boolean') room.settings.roundTimerEnabled = partial.roundTimerEnabled;
+    if (typeof partial.sabotageDeadCanFix === 'boolean') room.settings.sabotageDeadCanFix = partial.sabotageDeadCanFix;
     broadcast(room);
   });
 
@@ -1390,6 +1393,10 @@ io.on('connection', (socket) => {
 
     const collabPool = room.tasks.filter((t) => t.collaborative);
     const soloPool = room.tasks.filter((t) => !t.collaborative);
+    // Chain tasks combine two solo, non-wild-card tasks into a single task slot:
+    // the name is "A + B" (in the order they must be done), but only B's location
+    // is checked for distance — arriving there implies you already passed A.
+    const chainPool = soloPool.filter((t) => !t.anywhere);
     const toTask = (t) => ({
       taskId: t.id,
       assignmentId: 'a' + (room.nextAssignmentId++),
@@ -1426,11 +1433,30 @@ io.on('connection', (socket) => {
 
       // Every player gets exactly one collaborative task (drawn independently,
       // so two players may land on the same one and do it together), then the
-      // rest of their list is solo tasks.
+      // rest of their list is solo tasks — one of which is a chain task, if the
+      // pool supports it (needs at least 2 chain-eligible tasks and a free slot).
       const dealt = [];
       if (collabPool.length) dealt.push(collabPool[Math.floor(Math.random() * collabPool.length)]);
       const soloCount = Math.max(0, Math.min(s.tasksPerPlayer, room.tasks.length) - dealt.length);
-      dealt.push(...shuffled(soloPool).slice(0, soloCount));
+
+      let soloFillPool = soloPool;
+      let chainTask = null;
+      if (soloCount >= 1 && chainPool.length >= 2) {
+        const [a, b] = shuffled(chainPool).slice(0, 2);
+        chainTask = {
+          id: `chain:${a.id}+${b.id}`,
+          name: `${a.name} + ${b.name}`,
+          lat: b.lat,
+          lng: b.lng,
+          explanation: `First: ${a.explanation}\n\nThen, at this location: ${b.explanation}`,
+          photo: !!(a.photo || b.photo),
+          anywhere: false,
+          collaborative: false,
+        };
+        soloFillPool = soloPool.filter((t) => t.id !== a.id && t.id !== b.id);
+      }
+      dealt.push(...shuffled(soloFillPool).slice(0, chainTask ? soloCount - 1 : soloCount));
+      if (chainTask) dealt.push(chainTask);
 
       p.tasks = dealt.map((t) => ({ ...toTask(t), fake: p.role === 'impostor', done: false }));
     });
