@@ -1132,6 +1132,7 @@ function render() {
     killScreenShownFor !== gameCount
   ) {
     killScreenShownFor = gameCount;
+    $('kill-modal-sub').textContent = state.you.killerName ? `You were killed by ${state.you.killerName}.` : '';
     $('kill-modal').classList.remove('hidden');
   }
 

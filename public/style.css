@@ -378,8 +378,12 @@ button.small { font-size: 0.85rem; padding: 8px 12px; background: #34344e; }
 #role-modal-sub { font-size: 1.3rem; line-height: 1.4; }
 #role-modal-ok { font-size: 1.5rem; padding: 20px; }
 
-/* Kill screen — same treatment as the role card. */
+/* Kill screen — same treatment as the role card. The killer's name is
+   deliberately small and grey (unlike the other modals' full-brightness
+   subtext) — it's private info a passerby glancing at the phone shouldn't
+   easily notice, unlike "you were killed" itself which is fine to be seen. */
 #kill-modal-title { font-size: clamp(1.8rem, 9vw, 3.2rem); line-height: 1.2; overflow-wrap: break-word; color: #ff4757; }
+#kill-modal-sub { font-size: 1rem; line-height: 1.4; color: var(--muted); }
 #kill-modal-ok { font-size: 1.5rem; padding: 20px; }
 
 /* Public ejection reveal — same treatment as the role/kill cards: big name

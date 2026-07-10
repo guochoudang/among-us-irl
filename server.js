@@ -507,6 +507,15 @@ function endGame(room, winner, reason) {
 
 function startMeeting(room, reporter, victimName) {
   if (room.meetingTimer) clearTimeout(room.meetingTimer);
+  // Any other outstanding (unreported) bodies "stand up" the instant a
+  // meeting starts, for any reason — matching real Among Us, where dying
+  // makes you a free-roaming ghost immediately and a meeting is when the
+  // whole crew's information catches up at once, not just the one body that
+  // triggered it. They're freed to move and can no longer be re-reported
+  // (same as if they'd been individually found — see isReportable).
+  for (const q of Object.values(room.players)) {
+    if (!q.alive && !q.foundDead && !q.ejected) q.foundDead = true;
+  }
   pauseTimer(room); // the round clock freezes for the whole meeting
   // Any road closure still active also freezes for the meeting — see
   // blockEffectiveEndsAt / doTally for how it resumes afterward.
@@ -653,6 +662,7 @@ function tryKill(room, actor, targetKey) {
 
   target.alive = false;
   target.deathAt = now();
+  target.killerName = actor.name; // private — only ever shown on the victim's own kill screen
   // Ghost role is assigned instantly on death (the client only reveals it
   // after the victim dismisses the kill screen — see the kill-modal-ok
   // handler in app.js), but the ability to actually send a hint only
@@ -1088,6 +1098,10 @@ function viewFor(room, p) {
       alive: p.alive,
       ejected: p.ejected,
       foundDead: p.foundDead,
+      // Private to this player alone — never broadcast to anyone else's view,
+      // and only meaningful once they're dead. Shown once on their own kill
+      // screen so a passerby glancing at a live phone can't casually read it.
+      killerName: p.killerName || null,
       tasks: p.tasks,
       cooldownUntil: p.cooldownUntil || 0,
       gpsFresh: freshPos(room, p),
@@ -1202,6 +1216,7 @@ function makePlayer(key, name, socketId) {
     ejected: false,
     foundDead: false,
     deathAt: null,
+    killerName: null, // private to the victim alone — shown once on their own kill screen
     disbursedTo: {},
     pos: null,
     tasks: [],
@@ -1446,6 +1461,7 @@ io.on('connection', (socket) => {
       p.ejected = false;
       p.foundDead = false;
       p.deathAt = null;
+      p.killerName = null;
       p.disbursedTo = {};
       p.usedSeeLocation = false;
       p.seeLocationReveal = null;
@@ -1737,6 +1753,7 @@ io.on('connection', (socket) => {
       p.ejected = false;
       p.foundDead = false;
       p.deathAt = null;
+      p.killerName = null;
       p.disbursedTo = {};
       p.usedSeeLocation = false;
       p.seeLocationReveal = null;
