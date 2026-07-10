@@ -420,7 +420,7 @@ function initLobbyMap() {
     if (addingMeetingLocation) {
       const name = await askText('Name this meeting spot:');
       if (!name) return;
-      const locations = state.meetingLocations.map((m) => ({ name: m.name, lat: m.lat, lng: m.lng }));
+      const locations = state.meetingLocations.map((m) => ({ name: m.name, lat: m.lat, lng: m.lng, radius: m.radius }));
       locations.push({ name, lat: e.latlng.lat, lng: e.latlng.lng });
       socket.emit('setMeetingLocations', locations);
       return;
@@ -488,7 +488,7 @@ function renderMeetingLocations(map, which) {
       dot.on('click', async (e) => {
         L.DomEvent.stopPropagation(e);
         if (!(await askYesNo(`Remove meeting spot "${m.name}"?`))) return;
-        const locations = locs.filter((x) => x.id !== m.id).map((x) => ({ name: x.name, lat: x.lat, lng: x.lng }));
+        const locations = locs.filter((x) => x.id !== m.id).map((x) => ({ name: x.name, lat: x.lat, lng: x.lng, radius: x.radius }));
         socket.emit('setMeetingLocations', locations);
       });
     }
@@ -1625,23 +1625,37 @@ $('camera-keep').onclick = keepPhoto;
 // a stray tap can't accidentally complete a task.
 let expandedTaskId = null;
 let pinnedTaskId = null;
-let pinMarker = null;
+let pinMarkers = [];
 
 function setPin(t) {
   clearPin();
   pinnedTaskId = t.assignmentId;
-  if (gameMap) {
-    pinMarker = L.circleMarker([t.lat, t.lng], {
+  if (!gameMap) return;
+  // Chain tasks carry a first (firstLat/firstLng) AND second (lat/lng)
+  // location — show both pins so the order is visible on the map, even
+  // though only the second one is ever distance-checked for completion.
+  // Orange marks the first stop, red marks the second (matches the single
+  // pin's existing color for an ordinary task).
+  if (t.firstLat != null) {
+    const parts = t.name.split(' + ');
+    pinMarkers.push(L.circleMarker([t.firstLat, t.firstLng], {
+      radius: 7, color: '#fff', weight: 1.5, fillColor: '#ffa502', fillOpacity: 1,
+    }).addTo(gameMap).bindTooltip(`1st: ${parts[0] || t.name}`));
+    pinMarkers.push(L.circleMarker([t.lat, t.lng], {
       radius: 7, color: '#fff', weight: 1.5, fillColor: '#ff4757', fillOpacity: 1,
-    }).addTo(gameMap).bindTooltip(t.name);
-    // Map is static (never pans/zooms) — the pin just appears in place on the
-    // already-visible play area instead of the view jumping to it.
+    }).addTo(gameMap).bindTooltip(`2nd: ${parts[1] || t.name}`));
+  } else {
+    pinMarkers.push(L.circleMarker([t.lat, t.lng], {
+      radius: 7, color: '#fff', weight: 1.5, fillColor: '#ff4757', fillOpacity: 1,
+    }).addTo(gameMap).bindTooltip(t.name));
   }
+  // Map is static (never pans/zooms) — the pin(s) just appear in place on the
+  // already-visible play area instead of the view jumping to it.
 }
 
 function clearPin() {
-  if (pinMarker && gameMap) gameMap.removeLayer(pinMarker);
-  pinMarker = null;
+  if (gameMap) for (const m of pinMarkers) gameMap.removeLayer(m);
+  pinMarkers = [];
   pinnedTaskId = null;
 }
 
@@ -1666,6 +1680,12 @@ function renderTaskList() {
     } else {
       dist.dataset.lat = t.lat;
       dist.dataset.lng = t.lng;
+      // Chain task: also track the first location so the live distance
+      // readout can show both, e.g. "180 ft → 40 ft".
+      if (t.firstLat != null) {
+        dist.dataset.lat1 = t.firstLat;
+        dist.dataset.lng1 = t.firstLng;
+      }
     }
     row.append(name, dist);
 
@@ -1822,12 +1842,19 @@ function renderDynamic() {
   }
   renderSabotagePanel();
 
-  // live task distances
+  // live task distances. Chain tasks also carry a first location (lat1/lng1)
+  // — show both, in order, e.g. "180 ft → 40 ft" — even though only the
+  // second distance ever gates the "not close enough" completion check.
   document.querySelectorAll('.task-dist').forEach((el) => {
     if (el.dataset.lat === undefined) return; // wild-card task, shows "anywhere"
     if (!myPos) { el.textContent = ''; return; }
-    const d = feetBetween(myPos, { lat: Number(el.dataset.lat), lng: Number(el.dataset.lng) });
-    el.textContent = `${Math.round(d)} ft`;
+    const d2 = feetBetween(myPos, { lat: Number(el.dataset.lat), lng: Number(el.dataset.lng) });
+    if (el.dataset.lat1 !== undefined) {
+      const d1 = feetBetween(myPos, { lat: Number(el.dataset.lat1), lng: Number(el.dataset.lng1) });
+      el.textContent = `${Math.round(d1)} ft → ${Math.round(d2)} ft`;
+    } else {
+      el.textContent = `${Math.round(d2)} ft`;
+    }
   });
 
   // Report button in the bottom-left corner, live.

@@ -218,8 +218,13 @@ const DEFAULT_STREET_SEGMENTS = [
 // spots per-room from the lobby's "Meeting call spots" tool. If a room ends
 // up with none set, meeting calls fall back to unrestricted (see
 // tryCallVote) so this never silently disables an existing feature.
+// A spot can optionally override the global meetingCallRange with its own
+// `radius` (feet) — Baxley Court is a whole cul-de-sac loop, not a single
+// point, so it gets a bigger radius to cover the entire court rather than
+// just its center. (200ft is a starting estimate — nudge it if it doesn't
+// match the court's actual size once tested on site.)
 const DEFAULT_MEETING_LOCATIONS = [
-  { name: 'Baxley Court', lat: 37.30925, lng: -122.06055 },
+  { name: 'Baxley Court', lat: 37.30925, lng: -122.06055, radius: 200 },
   { name: 'Santa Teresa & Columbus', lat: 37.30826, lng: -122.05671 },
 ];
 
@@ -805,6 +810,12 @@ function tryVote(room, actor, target) {
   return null;
 }
 
+// A spot's own `radius` (feet) overrides the room's global meetingCallRange —
+// used for Baxley Court, a whole cul-de-sac loop rather than a single point.
+function meetingSpotRange(m, settings) {
+  return m.radius > 0 ? m.radius : settings.meetingCallRange;
+}
+
 // Any living player can call an emergency meeting, any number of times, as
 // long as they're near one of the designated meeting spots AND the room-wide
 // cooldown from the last emergency call has expired (see
@@ -818,7 +829,7 @@ function tryCallVote(room, actor) {
   // (old behavior) instead of silently becoming impossible.
   if (room.meetingLocations.length > 0) {
     if (!actor.pos) return 'You need a GPS fix to call a meeting.';
-    const nearSpot = room.meetingLocations.some((m) => feetBetween(actor.pos, m) <= room.settings.meetingCallRange);
+    const nearSpot = room.meetingLocations.some((m) => feetBetween(actor.pos, m) <= meetingSpotRange(m, room.settings));
     if (!nearSpot) return 'You must be near a designated meeting-call spot to do that.';
   }
   room.emergencyMeetingCooldown = { endsAt: now() + room.settings.emergencyMeetingCooldown * 1000, pausedRemainingMs: null };
@@ -1121,7 +1132,7 @@ function viewFor(room, p) {
       // silently disable meetings for a room the host hasn't set spots up in.
       nearMeetingLocation: room.meetingLocations.length === 0
         || (room.phase === 'playing' && p.alive && freshPos(room, p)
-          && room.meetingLocations.some((m) => feetBetween(p.pos, m) <= s.meetingCallRange)),
+          && room.meetingLocations.some((m) => feetBetween(p.pos, m) <= meetingSpotRange(m, s))),
     },
     killTargets: [],
     nearbyBodies: [],
@@ -1297,6 +1308,7 @@ io.on('connection', (socket) => {
       name: m.name,
       lat: m.lat,
       lng: m.lng,
+      radius: m.radius,
     }));
     room.players[key] = makePlayer(key, name, socket.id);
     applyAutoScale(room);
@@ -1422,6 +1434,11 @@ io.on('connection', (socket) => {
       name: String(m.name || 'Meeting spot').trim().slice(0, 60),
       lat: Number(m.lat),
       lng: Number(m.lng),
+      // Preserved from the client's own re-send of existing spots (see
+      // renderMeetingLocations/lobby click handler in app.js) — a spot's
+      // custom radius, like Baxley Court's, must survive adding/removing
+      // OTHER spots, since the client rebuilds this whole array each time.
+      radius: Number(m.radius) > 0 ? Number(m.radius) : undefined,
     })).filter((m) => Number.isFinite(m.lat) && Number.isFinite(m.lng));
     broadcast(room);
   });
@@ -1448,6 +1465,11 @@ io.on('connection', (socket) => {
       name: t.name,
       lat: t.lat,
       lng: t.lng,
+      // Only set for chain tasks — the first sub-task's location, shown on the
+      // map alongside the (distance-checked) second location, but never itself
+      // gated on distance. See the chain-task construction below.
+      firstLat: t.firstLat,
+      firstLng: t.firstLng,
       explanation: fillTaskTokens(t.explanation),
       photo: !!t.photo,
       anywhere: !!t.anywhere,
@@ -1493,6 +1515,8 @@ io.on('connection', (socket) => {
           name: `${a.name} + ${b.name}`,
           lat: b.lat,
           lng: b.lng,
+          firstLat: a.lat,
+          firstLng: a.lng,
           explanation: `First: ${a.explanation}\n\nThen, at this location: ${b.explanation}`,
           photo: !!(a.photo || b.photo),
           anywhere: false,
