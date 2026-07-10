@@ -39,7 +39,8 @@ const DEFAULT_SETTINGS = {
   timerAutoStart: true, // if false, the round clock starts paused until the host manually releases it
   blockDuration: 120, // how long a "Block Location" street closure lasts
   blockCooldown: 180, // wait after a block ends before the same impostor can use it again
-  meetingCallRange: 100, // how close to a meeting-call spot you must be to call an emergency meeting
+  meetingCallRange: 50, // how close to a meeting-call spot you must be to call an emergency meeting
+  emergencyMeetingCooldown: 300, // wait after an emergency meeting before another can be called (5 min default); pauses during meetings
   ghostChatCooldown: 60, // wait between ghost hint messages (Troll/Helper), per player
   ghostRolesEnabled: true, // Troll/Helper ghost roles + their private hint DMs, as one package
   taskDisbursementEnabled: false, // hand a dead player's unfinished tasks to a living crewmate
@@ -62,6 +63,7 @@ const SETTING_LIMITS = {
   blockDuration: [10, 600],
   blockCooldown: [10, 600],
   meetingCallRange: [10, 500],
+  emergencyMeetingCooldown: [60, 1800],
   ghostChatCooldown: [10, 300],
   sabotageCooldown: [60, 1800],
   sabotageReactorDuration: [30, 900],
@@ -210,12 +212,16 @@ const DEFAULT_STREET_SEGMENTS = [
 ];
 
 // Spots every new game starts with, where an emergency meeting can be called
-// from (each just a named point). Empty by default — draw these once in the
-// lobby's "Meeting call spots" tool for the locked-in map, then they'll be
-// here for every future game the same way DEFAULT_AREA/DEFAULT_TASKS are.
-// If a room ends up with none set, meeting calls fall back to unrestricted
-// (see tryCallVote) so this never silently disables an existing feature.
-const DEFAULT_MEETING_LOCATIONS = [];
+// from (each just a named point). Same real-world coordinates as the
+// "Circular Lap (Baxley Court)" and "Rock, Paper, Scissors (Santa Teresa x
+// Columbus)" tasks above, for consistency. The host can still add/remove
+// spots per-room from the lobby's "Meeting call spots" tool. If a room ends
+// up with none set, meeting calls fall back to unrestricted (see
+// tryCallVote) so this never silently disables an existing feature.
+const DEFAULT_MEETING_LOCATIONS = [
+  { name: 'Baxley Court', lat: 37.30925, lng: -122.06055 },
+  { name: 'Santa Teresa & Columbus', lat: 37.30826, lng: -122.05671 },
+];
 
 // Fixed sabotage spots for this deployment — same real-world points as the
 // "Bel Aire Court" and "Leavesley Place" tasks above, since those are already
@@ -516,6 +522,12 @@ function startMeeting(room, reporter, victimName) {
     if (room.sabotageTimer) clearTimeout(room.sabotageTimer);
     room.sabotageTimer = null;
   }
+  // Same freeze for the emergency-meeting cooldown — this meeting's own time
+  // doesn't count against the cooldown that calling it just started.
+  const emc = room.emergencyMeetingCooldown;
+  if (emc && emc.pausedRemainingMs == null && emc.endsAt > now()) {
+    emc.pausedRemainingMs = emc.endsAt - now();
+  }
   room.phase = 'meeting';
   room.meeting = {
     reporterName: reporter.name,
@@ -607,6 +619,11 @@ function doTally(room) {
     room.sabotage.endsAt = now() + room.sabotage.pausedRemainingMs;
     room.sabotage.pausedRemainingMs = null;
     scheduleSabotageTimeout(room);
+  }
+  // Same resume for the emergency-meeting cooldown.
+  if (room.emergencyMeetingCooldown && room.emergencyMeetingCooldown.pausedRemainingMs != null) {
+    room.emergencyMeetingCooldown.endsAt = now() + room.emergencyMeetingCooldown.pausedRemainingMs;
+    room.emergencyMeetingCooldown.pausedRemainingMs = null;
   }
   // Fresh kill cooldown after every meeting, like the real game.
   for (const p of Object.values(room.players)) {
@@ -778,12 +795,15 @@ function tryVote(room, actor, target) {
   return null;
 }
 
-// Every player (impostor included) gets exactly one emergency-meeting call for
-// the whole game. Once used, the button is gone from their screen for good.
+// Any living player can call an emergency meeting, any number of times, as
+// long as they're near one of the designated meeting spots AND the room-wide
+// cooldown from the last emergency call has expired (see
+// emergencyCooldownEffectiveEndsAt — that cooldown pauses for the duration of
+// any meeting, including this one, via startMeeting/doTally).
 function tryCallVote(room, actor) {
   if (room.phase !== 'playing') return 'You can only call a meeting during play.';
   if (!actor.alive) return 'You must be alive to call a meeting.';
-  if (actor.calledMeeting) return 'You already used your one emergency meeting this game.';
+  if (emergencyCooldownEffectiveEndsAt(room) > now()) return 'Emergency meeting is still on cooldown.';
   // If the host hasn't set any meeting-call spots, calling stays unrestricted
   // (old behavior) instead of silently becoming impossible.
   if (room.meetingLocations.length > 0) {
@@ -791,7 +811,7 @@ function tryCallVote(room, actor) {
     const nearSpot = room.meetingLocations.some((m) => feetBetween(actor.pos, m) <= room.settings.meetingCallRange);
     if (!nearSpot) return 'You must be near a designated meeting-call spot to do that.';
   }
-  actor.calledMeeting = true;
+  room.emergencyMeetingCooldown = { endsAt: now() + room.settings.emergencyMeetingCooldown * 1000, pausedRemainingMs: null };
   startMeeting(room, actor, null);
   return null;
 }
@@ -868,6 +888,15 @@ function tryBlockLocation(room, actor, segmentId) {
 function sabotageEffectiveEndsAt(room) {
   if (!room.sabotage) return null;
   return room.sabotage.pausedRemainingMs != null ? now() + room.sabotage.pausedRemainingMs : room.sabotage.endsAt;
+}
+
+// Same idea again, for the room-wide emergency-meeting call cooldown. Returns
+// 0 (i.e. "already expired") when no cooldown is set, so callers can always
+// safely compare against now() without a null check.
+function emergencyCooldownEffectiveEndsAt(room) {
+  const c = room.emergencyMeetingCooldown;
+  if (!c) return 0;
+  return c.pausedRemainingMs != null ? now() + c.pausedRemainingMs : c.endsAt;
 }
 
 // Schedules (or reschedules) the live timer that auto-wins the impostor if a
@@ -1007,6 +1036,9 @@ function viewFor(room, p) {
     area: room.area,
     streetSegments: room.streetSegments,
     meetingLocations: room.meetingLocations,
+    // Public to everyone — same reasoning as the sabotage countdown: it's a
+    // shared cooldown gating a button everyone can see and use, not a secret.
+    emergencyCooldownEndsAt: emergencyCooldownEffectiveEndsAt(room),
     // Backup text chat for the living during a meeting (voice-call fallback).
     // Visible to everyone present (dead players can watch, like the vote
     // list), but only living players can actually send to it — see
@@ -1059,7 +1091,6 @@ function viewFor(room, p) {
       tasks: p.tasks,
       cooldownUntil: p.cooldownUntil || 0,
       gpsFresh: freshPos(room, p),
-      calledMeeting: !!p.calledMeeting,
       usedSeeLocation: !!p.usedSeeLocation,
       blockCooldownUntil: p.blockCooldownUntil || 0,
       usedSegments: p.usedSegments || [],
@@ -1130,7 +1161,6 @@ function viewFor(room, p) {
         pos: b.pos ? { lat: b.pos.lat, lng: b.pos.lng } : null,
         tasksLeft: b.tasks.filter((t) => !t.done).length,
         cooldownUntil: b.cooldownUntil || 0,
-        calledMeeting: !!b.calledMeeting,
         usedSeeLocation: !!b.usedSeeLocation,
         blockCooldownUntil: b.blockCooldownUntil || 0,
         usedSegments: b.usedSegments || [],
@@ -1176,7 +1206,6 @@ function makePlayer(key, name, socketId) {
     pos: null,
     tasks: [],
     cooldownUntil: 0,
-    calledMeeting: false,   // each player gets exactly one emergency-meeting call per game
     usedSeeLocation: false, // each crewmate gets exactly one See Location use per game
     seeLocationReveal: null,
     blockCooldownUntil: 0, // impostor-only: wall-clock time Block Location becomes available again
@@ -1227,6 +1256,7 @@ io.on('connection', (socket) => {
       sabotage: null,
       sabotageTimer: null,
       lastSabotageResult: null,
+      emergencyMeetingCooldown: null,
       autoScale: true, // tasksPerPlayer + roundLength track player count until the host edits them
       timeLeftMs: 0,
       timerStartedAt: null,
@@ -1417,7 +1447,6 @@ io.on('connection', (socket) => {
       p.foundDead = false;
       p.deathAt = null;
       p.disbursedTo = {};
-      p.calledMeeting = false;
       p.usedSeeLocation = false;
       p.seeLocationReveal = null;
       p.blockCooldownUntil = 0;
@@ -1493,6 +1522,7 @@ io.on('connection', (socket) => {
     room.sabotageTimer = null;
     room.sabotage = null;
     room.lastSabotageResult = null;
+    room.emergencyMeetingCooldown = null;
     room.timeLeftMs = s.roundLength * 1000;
     if (s.timerAutoStart) {
       room.timerStartedAt = now();
@@ -1708,7 +1738,6 @@ io.on('connection', (socket) => {
       p.foundDead = false;
       p.deathAt = null;
       p.disbursedTo = {};
-      p.calledMeeting = false;
       p.usedSeeLocation = false;
       p.seeLocationReveal = null;
       p.tasks = [];

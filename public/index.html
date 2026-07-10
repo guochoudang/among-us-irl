@@ -89,7 +89,7 @@
         <button id="btn-segment-save" class="small hidden">✔ Finish section</button>
       </div>
       <h3>Meeting call spots <span class="pill" id="meetingloc-count">0</span></h3>
-      <p class="hint">Emergency meetings can only be called within 100 ft of one of these spots. Tap the map to add one, give it a name. Purple dots are your spots — tap one to remove it.</p>
+      <p class="hint">Emergency meetings can only be called within "Emergency meeting call range" feet of one of these spots, and only when the "Emergency meeting cooldown" isn't active (that cooldown pauses whenever a meeting is in progress, including body reports). Tap the map to add a spot, give it a name. Purple dots are your spots — tap one to remove it.</p>
       <div class="join-row">
         <button id="btn-meetingloc-add" class="small">📍 Add spot: tap map</button>
       </div>
@@ -121,7 +121,7 @@
     <div id="ghost-log-game"></div>
     <div id="sabotage-panel"></div>
     <div id="task-list"></div>
-    <button id="btn-callvote" class="small hidden">🚨 Call emergency meeting (1 use)</button>
+    <button id="btn-callvote" class="small hidden">🚨 Call emergency meeting</button>
     <button id="btn-seelocation" class="small hidden">👁 See location (1 use)</button>
     <button id="btn-blocklocation" class="small hidden">🚫 Block Location</button>
     <button id="btn-sabotage" class="small hidden">☢️ Sabotage</button>

@@ -923,9 +923,9 @@ function renderTestPanel(containerId) {
         rep.onclick = act('report');
         row.append(rep);
       }
-      if (b.alive && !b.calledMeeting) {
+      if (b.alive && Date.now() >= (state.emergencyCooldownEndsAt || 0)) {
         const cv = document.createElement('button');
-        cv.textContent = '🚨 Call meeting (1 use)';
+        cv.textContent = '🚨 Call meeting';
         cv.onclick = act('callVote');
         row.append(cv);
       }
@@ -1003,6 +1003,7 @@ const SETTINGS_META = [
   ['blockDuration', 'Block Location duration (seconds)'],
   ['blockCooldown', 'Block Location cooldown after (seconds)'],
   ['meetingCallRange', 'Emergency meeting call range (feet)'],
+  ['emergencyMeetingCooldown', 'Emergency meeting cooldown (seconds)'],
   ['ghostChatCooldown', 'Ghost hint cooldown (seconds)'],
   ['sabotageCooldown', 'Sabotage cooldown (seconds)'],
   ['sabotageReactorDuration', 'Reactor sabotage duration (seconds)'],
@@ -1230,8 +1231,11 @@ function renderGame() {
   // shouldn't reveal whether they're the impostor.
   $('progress-chip').textContent = `Tasks ${state.taskProgress.done}/${state.taskProgress.total}`;
 
-  // Both buttons vanish entirely (not just disabled) once used, or if dead.
-  const canCallMeeting = you.alive && !you.calledMeeting && state.phase === 'playing' && you.nearMeetingLocation;
+  // Call Emergency Meeting is repeatable (unlike See Location's one-time use)
+  // — it only vanishes when dead or out of range of a meeting spot; while on
+  // the room-wide cooldown it stays visible but disabled with a countdown
+  // (handled live in renderDynamic, same treatment as Block Location).
+  const canCallMeeting = you.alive && state.phase === 'playing' && you.nearMeetingLocation;
   $('btn-callvote').classList.toggle('hidden', !canCallMeeting);
   const canSeeLocation = you.alive && you.role !== 'impostor' && !you.usedSeeLocation && state.phase === 'playing';
   $('btn-seelocation').classList.toggle('hidden', !canSeeLocation);
@@ -1861,6 +1865,20 @@ function renderDynamic() {
     }
   }
 
+  // Call Emergency Meeting button: the cooldown is room-wide (not per-player,
+  // like Block Location's), so it reads state.emergencyCooldownEndsAt — an
+  // absolute server timestamp already frozen/resumed server-side across
+  // meetings, same as the sabotage countdown above.
+  const callBtn = $('btn-callvote');
+  if (!callBtn.classList.contains('hidden')) {
+    const cooldownEndsAt = state.emergencyCooldownEndsAt || 0;
+    const callReady = online && Date.now() >= cooldownEndsAt;
+    callBtn.disabled = !callReady;
+    callBtn.textContent = callReady
+      ? '🚨 Call emergency meeting'
+      : `🚨 Call emergency meeting (${fmt(Math.max(0, Math.ceil((cooldownEndsAt - Date.now()) / 1000)))})`;
+  }
+
   // Block Location button: unlike kill/report it's fine to show its own
   // cooldown countdown — it's a repeatable ability only the impostor ever
   // sees, there's no bystander-glancing-at-the-phone concern like with kill.
@@ -2142,7 +2160,8 @@ $('btn-endgame-early').onclick = async () => {
   if (await askYesNo('Are you sure you want to end this game early?')) socket.emit('endEarly');
 };
 $('btn-callvote').onclick = async () => {
-  if (await askYesNo("This is your ONE emergency meeting call for the whole game. Use it now?")) socket.emit('callVote');
+  if ($('btn-callvote').disabled) return;
+  if (await askYesNo('Call an emergency meeting now?')) socket.emit('callVote');
 };
 $('btn-seelocation').onclick = async () => {
   if (await askYesNo('This is your ONE See Location use for the whole game. Reveal some players\' locations now?')) socket.emit('seeLocation');
