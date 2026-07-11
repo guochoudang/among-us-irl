@@ -66,12 +66,12 @@
       </div>
       <p class="hint">When on, a killed player's unfinished tasks are immediately copied to a living crewmate — a free hint that a kill just happened. Off by default so dying doesn't automatically tip anyone off.</p>
       <h3>Sabotage</h3>
-      <p class="hint">The impostor can trigger Reactor (Bel Aire Court, needs 2 people to fix) or O2 (Leavesley Place, needs 1) on a cooldown. Can't be used while a road is blocked, or vice versa. Durations and cooldown are in the settings above.</p>
+      <p class="hint">The impostor can trigger Reactor (needs 2 different people, one at Bel Aire Court and one at Leavesley Place), O2 (Rae Lane, needs 1), or Comms (Baxley Court, needs 1) — only one sabotage can be active at a time, and it can't be used while a road is blocked, or vice versa. Reactor/O2 share one cooldown; Comms has its own, separate cooldown. Durations and cooldowns are in the settings above. Comms has no time limit and doesn't end the game on its own — it closes the map and disables emergency meetings for everyone until someone fixes it.</p>
       <div class="setting-row">
         <label for="set-sabotageDeadCanFix">Dead players can also fix sabotages</label>
         <input type="checkbox" id="set-sabotageDeadCanFix">
       </div>
-      <p class="hint">Off by default — only living players can enter the code to fix Reactor/O2. Turn on to let ghosts (found-dead or ejected players) help fix too.</p>
+      <p class="hint">Off by default — only living players can enter the code to fix a sabotage. Turn on to let ghosts (found-dead or ejected players) help fix too.</p>
       <h3>Tasks <span id="task-count" class="pill"></span></h3>
       <p class="hint">Tap the map where a task should be, give it a name. Blue dots are your created tasks — tap one to remove it.</p>
       <div id="lobby-map" class="map"></div>
@@ -115,6 +115,9 @@
   <div id="map-wrap">
     <div id="game-map" class="map grow"></div>
     <div id="report-overlay"></div>
+    <!-- Covers the map (not destroyed, just hidden underneath) while Comms is
+         sabotaged — see renderDynamic's comms-blackout toggle in app.js. -->
+    <div id="comms-blackout" class="hidden">📡 Comms sabotaged — map offline</div>
   </div>
   <div id="panel">
     <div id="dead-area"></div>

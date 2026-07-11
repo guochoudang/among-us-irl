@@ -268,6 +268,11 @@ button.small { font-size: 0.85rem; padding: 8px 12px; background: #34344e; }
 .sabotage-card .sabotage-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; font-weight: 700; }
 .sabotage-card .sabotage-progress { font-size: 1.2rem; }
 .sabotage-card .sabotage-timer { font-size: 1.2rem; color: var(--red); }
+/* One block per fix location (Reactor has two, different spots) — a divider
+   between them makes it clear they're separate, independent fixes. */
+#sabotage-locations { display: flex; flex-direction: column; gap: 10px; }
+.sabotage-location-row { display: flex; flex-direction: column; gap: 8px; }
+.sabotage-location-row + .sabotage-location-row { border-top: 1px solid rgba(255, 255, 255, 0.15); padding-top: 10px; }
 .sabotage-input-row { display: flex; gap: 8px; }
 /* The code is shown as the placeholder ("the background of the text box")
    rather than typed content, so it needs to be big and legible at a glance —
@@ -334,6 +339,23 @@ button.small { font-size: 0.85rem; padding: 8px 12px; background: #34344e; }
   padding: 28px 32px;
   font-size: 2rem;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.55);
+}
+
+/* Comms sabotaged: covers the map entirely (Leaflet keeps running underneath,
+   untouched, so there's no re-init/zoom risk when it's uncovered again). */
+#comms-blackout {
+  position: absolute;
+  inset: 0;
+  z-index: 1200;
+  background: #0a0a12;
+  color: var(--red);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  font-size: 1.3rem;
+  font-weight: 700;
+  padding: 24px;
 }
 
 /* Kill button lives at the bottom of the scrollable panel — below the fold, so

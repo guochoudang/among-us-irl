@@ -496,25 +496,25 @@ function renderMeetingLocations(map, which) {
   $('meetingloc-count') && ($('meetingloc-count').textContent = locs.length);
 }
 
-// Sabotage location marker — only shown while a sabotage is actually active
-// (red ring around the spot), offset slightly so it doesn't cover the task
-// dot that already sits at that same location.
+// Sabotage location markers — only shown while a sabotage is actually active
+// (a ring per fix location: red while pending, green once fixed — Reactor has
+// two, O2/Comms have one), offset slightly so they don't cover the task dot
+// that already sits at that same real-world spot.
 function renderSabotageSpots(map) {
   if (!map || !state) return;
-  const spots = state.sabotageSpots || [];
-  const activeType = state.sabotage ? state.sabotage.type : null;
-  const hash = JSON.stringify([spots, activeType]);
+  const sab = state.sabotage;
+  const hash = JSON.stringify(sab ? sab.locations : null);
   if (lastSabotageSpotHash === hash) return;
   lastSabotageSpotHash = hash;
   if (!sabotageSpotLayer) sabotageSpotLayer = L.layerGroup().addTo(map);
   sabotageSpotLayer.clearLayers();
-  if (!activeType) return;
-  const s = spots.find((sp) => sp.type === activeType);
-  if (!s) return;
-  const offsetLat = s.lat + 0.00012; // nudge north so the task dot underneath stays visible
-  L.circleMarker([offsetLat, s.lng], {
-    radius: 12, color: '#ff4757', weight: 3, fillOpacity: 0,
-  }).addTo(sabotageSpotLayer).bindTooltip(`${s.name} (${s.label})`);
+  if (!sab) return;
+  for (const loc of sab.locations) {
+    const offsetLat = loc.lat + 0.00012; // nudge north so the task dot underneath stays visible
+    L.circleMarker([offsetLat, loc.lng], {
+      radius: 12, color: loc.fixed ? '#3ecf6e' : '#ff4757', weight: 3, fillOpacity: 0,
+    }).addTo(sabotageSpotLayer).bindTooltip(`${loc.label}${loc.fixed ? ' ✅ fixed' : ''}`);
+  }
 }
 
 function updateSegmentDraft() {
@@ -590,30 +590,34 @@ function renderBlockPicker() {
   }
 }
 
-// Impostor-only: choosing which of the two fixed sabotage spots to trigger.
-// Unlike Block Location there's nothing to tap on the map — the spots are
-// fixed, not host-drawn — so this is just two buttons, each showing why
-// they're disabled (cooldown, a road already blocked, or one already active).
+// Impostor-only: choosing which fixed sabotage to trigger. Unlike Block
+// Location there's nothing to tap on the map — the spots are fixed, not
+// host-drawn — so this is just one button per sabotage type, each showing
+// why it's disabled (cooldown, a road already blocked, or one already
+// active). Reactor and O2 share one cooldown; Comms has its own, separate one.
+const SABOTAGE_ICONS = { reactor: '☢️', o2: '🫁', comms: '📡' };
 function renderSabotagePicker() {
   const el = $('sabotage-picker');
   el.innerHTML = '';
   el.classList.toggle('hidden', !placingSabotage);
   if (!placingSabotage || !state) return;
-  const onCooldown = Date.now() < (state.you.sabotageCooldownUntil || 0);
   const roadBlocked = (state.activeBlocks || []).length > 0;
   const alreadyActive = !!state.sabotage;
   for (const spot of (state.sabotageSpots || [])) {
+    const cooldownField = spot.type === 'comms' ? 'commsCooldownUntil' : 'sabotageCooldownUntil';
+    const cooldownUntil = state.you[cooldownField] || 0;
+    const onCooldown = Date.now() < cooldownUntil;
     const btn = document.createElement('button');
     const disabled = onCooldown || roadBlocked || alreadyActive;
     btn.disabled = disabled;
-    const icon = spot.type === 'reactor' ? '☢️' : '🫁';
-    let label = `${icon} ${spot.name} (${spot.label})`;
-    if (onCooldown) label += ` — wait ${fmt(Math.max(0, Math.ceil(((state.you.sabotageCooldownUntil || 0) - Date.now()) / 1000)))}`;
-    else if (roadBlocked) label += ' — a road is blocked';
-    else if (alreadyActive) label += ' — already active';
-    btn.textContent = label;
+    const spotLabel = spot.locations.map((l) => l.label).join(' and ');
+    let text = `${SABOTAGE_ICONS[spot.type] || ''} ${spot.name} (${spotLabel})`;
+    if (onCooldown) text += ` — wait ${fmt(Math.max(0, Math.ceil((cooldownUntil - Date.now()) / 1000)))}`;
+    else if (roadBlocked) text += ' — a road is blocked';
+    else if (alreadyActive) text += ' — already active';
+    btn.textContent = text;
     btn.onclick = async () => {
-      if (await askYesNo(`Trigger the ${spot.name} sabotage at ${spot.label}?`)) {
+      if (await askYesNo(`Trigger the ${spot.name} sabotage at ${spotLabel}?`)) {
         socket.emit('sabotage', { type: spot.type });
       }
       placingSabotage = false;
@@ -898,24 +902,38 @@ function renderTestPanel(containerId) {
           row.append(blk);
         }
       }
-      if (b.alive && b.role === 'impostor' && !state.sabotage
-        && Date.now() >= (b.sabotageCooldownUntil || 0) && !(state.activeBlocks || []).length) {
-        const reactorBtn = document.createElement('button');
-        reactorBtn.className = 'danger';
-        reactorBtn.textContent = '☢️ Sabotage Reactor';
-        reactorBtn.onclick = act('sabotage', 'reactor');
-        row.append(reactorBtn);
-        const o2Btn = document.createElement('button');
-        o2Btn.className = 'danger';
-        o2Btn.textContent = '🫁 Sabotage O2';
-        o2Btn.onclick = act('sabotage', 'o2');
-        row.append(o2Btn);
+      if (b.alive && b.role === 'impostor' && !state.sabotage && !(state.activeBlocks || []).length) {
+        if (Date.now() >= (b.sabotageCooldownUntil || 0)) {
+          const reactorBtn = document.createElement('button');
+          reactorBtn.className = 'danger';
+          reactorBtn.textContent = '☢️ Sabotage Reactor';
+          reactorBtn.onclick = act('sabotage', 'reactor');
+          row.append(reactorBtn);
+          const o2Btn = document.createElement('button');
+          o2Btn.className = 'danger';
+          o2Btn.textContent = '🫁 Sabotage O2';
+          o2Btn.onclick = act('sabotage', 'o2');
+          row.append(o2Btn);
+        }
+        if (Date.now() >= (b.commsCooldownUntil || 0)) {
+          const commsBtn = document.createElement('button');
+          commsBtn.className = 'danger';
+          commsBtn.textContent = '📡 Sabotage Comms';
+          commsBtn.onclick = act('sabotage', 'comms');
+          row.append(commsBtn);
+        }
       }
       if (state.sabotage && (b.alive || ((b.foundDead || b.ejected) && state.settings.sabotageDeadCanFix))) {
-        const fixBtn = document.createElement('button');
-        fixBtn.textContent = '🛠 Fix sabotage';
-        fixBtn.onclick = act('sabotageFix');
-        row.append(fixBtn);
+        // One button per still-unfixed location (Reactor has two, different
+        // real-world spots — a different bot should fix each one; O2/Comms
+        // just have the one).
+        state.sabotage.locations.forEach((loc, idx) => {
+          if (loc.fixed) return;
+          const fixBtn = document.createElement('button');
+          fixBtn.textContent = `🛠 Fix at ${loc.label}`;
+          fixBtn.onclick = act('sabotageFix', idx);
+          row.append(fixBtn);
+        });
       }
       if (b.alive) {
         const rep = document.createElement('button');
@@ -923,7 +941,7 @@ function renderTestPanel(containerId) {
         rep.onclick = act('report');
         row.append(rep);
       }
-      if (b.alive && Date.now() >= (state.emergencyCooldownEndsAt || 0)) {
+      if (b.alive && Date.now() >= (state.emergencyCooldownEndsAt || 0) && !(state.sabotage && state.sabotage.type === 'comms')) {
         const cv = document.createElement('button');
         cv.textContent = '🚨 Call meeting';
         cv.onclick = act('callVote');
@@ -1005,10 +1023,11 @@ const SETTINGS_META = [
   ['meetingCallRange', 'Emergency meeting call range (feet)'],
   ['emergencyMeetingCooldown', 'Emergency meeting cooldown (seconds)'],
   ['ghostChatCooldown', 'Ghost hint cooldown (seconds)'],
-  ['sabotageCooldown', 'Sabotage cooldown (seconds)'],
+  ['sabotageCooldown', 'Reactor/O2 sabotage cooldown (seconds)'],
   ['sabotageReactorDuration', 'Reactor sabotage duration (seconds)'],
   ['sabotageO2Duration', 'O2 sabotage duration (seconds)'],
   ['sabotageFixRange', 'Sabotage fix range (feet)'],
+  ['commsCooldown', 'Comms sabotage cooldown (seconds)'],
 ];
 let settingsBuilt = false;
 
@@ -1395,13 +1414,22 @@ function renderGhostInbox(containerId) {
   }
 }
 
-// Active-sabotage fix-it card: progress, live countdown, and the code entry
-// (anyone — impostor included — can contribute). Only meaningful on the game
-// screen, same as tasks. Builds the card once per sabotage instance and only
-// touches the input/progress/timer text on later ticks — never recreating
-// the input — for the same reason renderGhostComposer does: this re-runs
-// every ~2s from ordinary GPS-driven broadcasts, and rebuilding an <input>
-// that often would wipe whatever the player's mid-typing.
+const SABOTAGE_TITLES = { reactor: '☢️ Fix the REACTOR', o2: '🫁 Fix the O2', comms: '📡 Fix COMMS' };
+
+// Active-sabotage fix-it card: progress, live countdown (or "no time limit"
+// for Comms), and one code-entry row PER fix location (Reactor has two,
+// different real-world spots; O2/Comms have one). Anyone — impostor included
+// — can contribute, but each player can only ever fix one location for a
+// given sabotage instance (see trySabotageFix), so Reactor's two spots
+// genuinely need two different people. Only meaningful on the game screen,
+// same as tasks.
+//
+// Rebuilds are scoped as narrowly as possible: the outer card only rebuilds
+// on a new sabotage instance; each location's row only rebuilds when THAT
+// location's own fixed/blocked state changes — never on every ~2s
+// GPS-driven re-render, and never when an unrelated location gets fixed by
+// someone else, so an in-progress code entry never gets wiped out from under
+// a player mid-type (same concern as renderGhostComposer).
 function renderSabotagePanel() {
   const container = $('sabotage-panel');
   if (!state || state.phase !== 'playing' || !state.sabotage) {
@@ -1409,25 +1437,19 @@ function renderSabotagePanel() {
     return;
   }
   const sab = state.sabotage;
-  const spot = (state.sabotageSpots || []).find((s) => s.type === sab.type);
   let card = container.querySelector('.sabotage-card');
-  const needsRebuild = !card
-    || card.dataset.sabotageId !== String(sab.id)
-    || card.dataset.fixedByYou !== String(sab.fixedByYou)
-    || card.dataset.youAlive !== String(state.you.alive);
+  const needsFullRebuild = !card || card.dataset.sabotageId !== String(sab.id);
 
-  if (needsRebuild) {
+  if (needsFullRebuild) {
     container.innerHTML = '';
     card = document.createElement('div');
     card.className = 'sabotage-card';
     card.dataset.sabotageId = String(sab.id);
-    card.dataset.fixedByYou = String(sab.fixedByYou);
-    card.dataset.youAlive = String(state.you.alive);
 
     const head = document.createElement('div');
     head.className = 'sabotage-head';
     const title = document.createElement('span');
-    title.textContent = sab.type === 'reactor' ? '☢️ Fix the REACTOR' : '🫁 Fix the O2';
+    title.textContent = SABOTAGE_TITLES[sab.type] || 'Fix the sabotage';
     const progress = document.createElement('span');
     progress.className = 'sabotage-progress';
     progress.id = 'sabotage-progress-text';
@@ -1439,22 +1461,66 @@ function renderSabotagePanel() {
     timer.id = 'sabotage-timer-text';
     card.append(timer);
 
-    if (spot) {
-      const locHint = document.createElement('p');
-      locHint.className = 'hint';
-      locHint.textContent = `Head to ${spot.label} and enter the code below.`;
-      card.append(locHint);
+    if (sab.type === 'comms') {
+      const noLimitHint = document.createElement('p');
+      noLimitHint.className = 'hint';
+      noLimitHint.textContent = 'No time limit — but the map stays down for everyone, and emergency meetings are disabled, until this is fixed.';
+      card.append(noLimitHint);
     }
 
-    const deadAndBlocked = !state.you.alive && !state.settings.sabotageDeadCanFix;
-    if (deadAndBlocked) {
+    const locsWrap = document.createElement('div');
+    locsWrap.id = 'sabotage-locations';
+    card.append(locsWrap);
+
+    container.append(card);
+  }
+
+  const progressEl = card.querySelector('#sabotage-progress-text');
+  if (progressEl) progressEl.textContent = `${sab.fixedCount}/${sab.required}`;
+
+  const timerEl = card.querySelector('#sabotage-timer-text');
+  if (timerEl) {
+    timerEl.textContent = sab.endsAt == null
+      ? '⏳ No time limit'
+      : `⏳ ${fmt(Math.max(0, Math.ceil((sab.endsAt - Date.now()) / 1000)))} remaining`;
+  }
+
+  const locsWrap = card.querySelector('#sabotage-locations');
+  if (!locsWrap) return;
+  const deadAndBlocked = !state.you.alive && !state.settings.sabotageDeadCanFix;
+  sab.locations.forEach((loc, idx) => {
+    const existing = locsWrap.querySelector(`[data-loc-index="${idx}"]`);
+    const key = `${loc.fixed}|${sab.fixedByYou}|${deadAndBlocked}`;
+    if (existing && existing.dataset.key === key) return; // nothing about this row changed
+
+    const row = document.createElement('div');
+    row.className = 'sabotage-location-row';
+    row.dataset.locIndex = String(idx);
+    row.dataset.key = key;
+
+    if (loc.fixed) {
+      const done = document.createElement('p');
+      done.className = 'hint';
+      done.textContent = `✅ ${loc.label} — fixed`;
+      row.append(done);
+    } else if (deadAndBlocked) {
       const blocked = document.createElement('p');
       blocked.className = 'hint';
-      blocked.textContent = 'Only living players can fix sabotages in this game.';
-      card.append(blocked);
-    } else if (!sab.fixedByYou) {
-      const row = document.createElement('div');
-      row.className = 'sabotage-input-row';
+      blocked.textContent = `Only living players can fix sabotages in this game. (${loc.label} still needs fixing.)`;
+      row.append(blocked);
+    } else if (sab.fixedByYou) {
+      const waiting = document.createElement('p');
+      waiting.className = 'hint';
+      waiting.textContent = `You've entered the code — ${loc.label} still needs someone else to fix it.`;
+      row.append(waiting);
+    } else {
+      const label = document.createElement('p');
+      label.className = 'hint';
+      label.textContent = `Head to ${loc.label} and enter the code below.`;
+      row.append(label);
+
+      const inputRow = document.createElement('div');
+      inputRow.className = 'sabotage-input-row';
       const input = document.createElement('input');
       input.type = 'text';
       input.inputMode = 'numeric';
@@ -1466,31 +1532,17 @@ function renderSabotagePanel() {
       submitBtn.onclick = async () => {
         const val = input.value.trim();
         if (!val) return toast('Type the code first.');
-        if (spot) {
-          const far = !myPos || feetBetween(myPos, spot) > state.settings.sabotageFixRange;
-          if (far && !(await askYesNo(`You don't seem to be at ${spot.label}. Did you actually complete this?`))) return;
-        }
-        socket.emit('sabotageFix', { code: val });
+        const far = !myPos || feetBetween(myPos, loc) > state.settings.sabotageFixRange;
+        if (far && !(await askYesNo(`You don't seem to be at ${loc.label}. Did you actually complete this?`))) return;
+        socket.emit('sabotageFix', { code: val, locationIndex: idx });
         input.value = '';
       };
-      row.append(input, submitBtn);
-      card.append(row);
-    } else {
-      const done = document.createElement('p');
-      done.className = 'hint';
-      done.textContent = "You've entered the code — waiting on the rest.";
-      card.append(done);
+      inputRow.append(input, submitBtn);
+      row.append(inputRow);
     }
-    container.append(card);
-  }
 
-  const progressEl = card.querySelector('#sabotage-progress-text');
-  if (progressEl) progressEl.textContent = `${sab.fixedCount}/${sab.required}`;
-  const timerEl = card.querySelector('#sabotage-timer-text');
-  if (timerEl) {
-    const left = Math.max(0, Math.ceil((sab.endsAt - Date.now()) / 1000));
-    timerEl.textContent = `⏳ ${fmt(left)} remaining`;
-  }
+    if (existing) existing.replaceWith(row); else locsWrap.append(row);
+  });
 }
 
 // Backup text chat for the living during a meeting, in case the voice call
@@ -1830,12 +1882,21 @@ function renderDynamic() {
   // Sabotage: visible to everyone while active, showing progress + a live
   // countdown. state.sabotage.endsAt is already an absolute server timestamp
   // (like meeting/block endsAt elsewhere), so no local snapshot is needed —
-  // just compare directly against Date.now() each tick.
+  // just compare directly against Date.now() each tick. Comms has no time
+  // limit (endsAt is null), so it just shows progress with no countdown.
+  // Comms sabotage closes the map for everyone until it's fixed — the
+  // Leaflet instance keeps running untouched underneath the blackout, so
+  // there's no re-init risk when it's uncovered again.
+  $('comms-blackout').classList.toggle('hidden', !(state.sabotage && state.sabotage.type === 'comms'));
+
   const sabChip = $('sabotage-chip');
   if (state.sabotage) {
-    const left = Math.max(0, Math.ceil((state.sabotage.endsAt - Date.now()) / 1000));
-    const label = state.sabotage.type === 'reactor' ? 'REACTOR' : 'O2';
-    sabChip.textContent = `☢️ ${label} ${state.sabotage.fixedCount}/${state.sabotage.required} · ${fmt(left)}`;
+    const label = state.sabotage.type.toUpperCase();
+    const icon = SABOTAGE_ICONS[state.sabotage.type] || '⚠️';
+    const timePart = state.sabotage.endsAt == null
+      ? ''
+      : ` · ${fmt(Math.max(0, Math.ceil((state.sabotage.endsAt - Date.now()) / 1000)))}`;
+    sabChip.textContent = `${icon} ${label} ${state.sabotage.fixedCount}/${state.sabotage.required}${timePart}`;
     sabChip.classList.remove('hidden');
   } else {
     sabChip.classList.add('hidden');
@@ -1896,15 +1957,19 @@ function renderDynamic() {
   // Call Emergency Meeting button: the cooldown is room-wide (not per-player,
   // like Block Location's), so it reads state.emergencyCooldownEndsAt — an
   // absolute server timestamp already frozen/resumed server-side across
-  // meetings, same as the sabotage countdown above.
+  // meetings, same as the sabotage countdown above. Comms sabotage disables
+  // calling entirely, regardless of cooldown — that's the whole point of it.
   const callBtn = $('btn-callvote');
   if (!callBtn.classList.contains('hidden')) {
+    const commsDown = !!(state.sabotage && state.sabotage.type === 'comms');
     const cooldownEndsAt = state.emergencyCooldownEndsAt || 0;
-    const callReady = online && Date.now() >= cooldownEndsAt;
+    const callReady = online && !commsDown && Date.now() >= cooldownEndsAt;
     callBtn.disabled = !callReady;
-    callBtn.textContent = callReady
-      ? '🚨 Call emergency meeting'
-      : `🚨 Call emergency meeting (${fmt(Math.max(0, Math.ceil((cooldownEndsAt - Date.now()) / 1000)))})`;
+    callBtn.textContent = commsDown
+      ? '🚨 Call emergency meeting (comms down)'
+      : callReady
+        ? '🚨 Call emergency meeting'
+        : `🚨 Call emergency meeting (${fmt(Math.max(0, Math.ceil((cooldownEndsAt - Date.now()) / 1000)))})`;
   }
 
   // Block Location button: unlike kill/report it's fine to show its own
@@ -2055,6 +2120,8 @@ function renderEnd() {
   if (crewWon) sub = 'All tasks done or every impostor voted out.';
   else if (state.winReason === 'timeout') sub = "Time ran out before the impostor was caught.";
   else if (state.winReason === 'sabotage') {
+    // Comms has no time limit, so it can never be the cause of a timeout win —
+    // this path is only ever reached by Reactor or O2.
     const label = state.lastSabotageResult && state.lastSabotageResult.type === 'reactor' ? 'Reactor' : 'O2';
     sub = `The ${label} sabotage wasn't fixed in time.`;
   } else sub = 'The crew has fallen.';
@@ -2086,25 +2153,40 @@ socket.on('state', (s) => {
   }
 });
 
-// Sabotage reveals: "started" and "fixed" share one modal (like ghost-modal's
-// troll/helper reveal). A timeout instead ends the game via checkWin, so
-// that case is left to the end screen rather than shown here. sabotage.id and
-// lastSabotageResult.at are both server-side monotonic values that are never
-// reused across games in the same room, so no per-game reset is needed.
+// Sabotage reveals: "started", "partial fix" (Reactor only — one of its two
+// spots done, the other still pending), and "fully fixed" all share one modal
+// (like ghost-modal's troll/helper reveal). A timeout instead ends the game
+// via checkWin, so that case is left to the end screen rather than shown
+// here. sabotage.id and lastSabotageResult.at are both server-side monotonic
+// values that are never reused across games in the same room, so no
+// per-game reset is needed.
 socket.on('state', (s) => {
   if (s.sabotage && s.sabotage.id !== lastSabotageIdShown) {
     lastSabotageIdShown = s.sabotage.id;
-    const spot = (s.sabotageSpots || []).find((sp) => sp.type === s.sabotage.type);
-    const label = s.sabotage.type === 'reactor' ? 'REACTOR' : 'O2';
-    $('sabotage-modal-title').textContent = `${label} was sabotaged at ${spot ? spot.label : ''}.`;
-    $('sabotage-modal-sub').textContent = 'Head there and enter the code to stop it.';
+    const label = s.sabotage.type.toUpperCase();
+    const locLabel = s.sabotage.locations.map((l) => l.label).join(' and ');
+    $('sabotage-modal-title').textContent = `${label} was sabotaged at ${locLabel}.`;
+    if (s.sabotage.type === 'comms') {
+      $('sabotage-modal-sub').textContent = 'The map is offline and emergency meetings are disabled for everyone until someone fixes it there.';
+    } else if (s.sabotage.locations.length > 1) {
+      $('sabotage-modal-sub').textContent = 'Head to both spots — a different person at each — and enter the code to stop it.';
+    } else {
+      $('sabotage-modal-sub').textContent = 'Head there and enter the code to stop it.';
+    }
     $('sabotage-modal').classList.remove('hidden');
   }
-  if (s.lastSabotageResult && s.lastSabotageResult.outcome === 'fixed' && s.lastSabotageResult.at !== lastSabotageResultShown) {
+  if (s.lastSabotageResult && s.lastSabotageResult.at !== lastSabotageResultShown
+      && (s.lastSabotageResult.outcome === 'fixed' || s.lastSabotageResult.outcome === 'partial')) {
     lastSabotageResultShown = s.lastSabotageResult.at;
-    const label = s.lastSabotageResult.type === 'reactor' ? 'REACTOR' : 'O2';
-    $('sabotage-modal-title').textContent = `${label} was fixed.`;
-    $('sabotage-modal-sub').textContent = '';
+    if (s.lastSabotageResult.outcome === 'fixed') {
+      $('sabotage-modal-title').textContent = `${s.lastSabotageResult.type.toUpperCase()} was fixed.`;
+      $('sabotage-modal-sub').textContent = '';
+    } else {
+      // Partial: indicate exactly which spot just got fixed and which one is
+      // still outstanding.
+      $('sabotage-modal-title').textContent = `${s.lastSabotageResult.fixedLabel} was fixed!`;
+      $('sabotage-modal-sub').textContent = `${s.lastSabotageResult.remainingLabel} still needs fixing.`;
+    }
     $('sabotage-modal').classList.remove('hidden');
   }
 });

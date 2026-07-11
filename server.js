@@ -44,11 +44,12 @@ const DEFAULT_SETTINGS = {
   ghostChatCooldown: 60, // wait between ghost hint messages (Troll/Helper), per player
   ghostRolesEnabled: true, // Troll/Helper ghost roles + their private hint DMs, as one package
   taskDisbursementEnabled: false, // hand a dead player's unfinished tasks to a living crewmate
-  sabotageCooldown: 600,        // how often the impostor can trigger a sabotage (10 min default)
+  sabotageCooldown: 600,        // how often the impostor can trigger Reactor/O2 (10 min default) — shared between the two
   sabotageReactorDuration: 300, // time to fix Reactor before it auto-wins the impostor the game (5 min)
   sabotageO2Duration: 240,      // same, for O2 (4 min)
-  sabotageFixRange: 50,         // farther than this from the sabotage spot, entering the code asks for confirmation
+  sabotageFixRange: 50,         // farther than this from a sabotage fix spot, entering the code asks for confirmation
   sabotageDeadCanFix: false,    // if false (default), only living players can enter the code to fix a sabotage
+  commsCooldown: 300,           // how often the impostor can trigger Comms — separate from sabotageCooldown (5 min default)
 };
 
 const SETTING_LIMITS = {
@@ -69,6 +70,7 @@ const SETTING_LIMITS = {
   sabotageReactorDuration: [30, 900],
   sabotageO2Duration: [30, 900],
   sabotageFixRange: [10, 500],
+  commsCooldown: [60, 1800],
 };
 
 // tasksPerPlayer + round length scale with how many people are in the game.
@@ -228,14 +230,50 @@ const DEFAULT_MEETING_LOCATIONS = [
   { name: 'Santa Teresa & Columbus', lat: 37.30826, lng: -122.05671 },
 ];
 
-// Fixed sabotage spots for this deployment — same real-world points as the
-// "Bel Aire Court" and "Leavesley Place" tasks above, since those are already
-// this neighborhood's established coordinates for those two streets. Unlike
-// tasks/segments/meeting-spots, these aren't host-drawn: the two sabotage
-// types are a fixed part of the mechanic, not per-room configuration.
+// Fixed sabotage spots for this deployment. Unlike tasks/segments/meeting
+// spots, these aren't host-drawn: each sabotage type is a fixed part of the
+// mechanic, not per-room configuration. Each type has one or more fix
+// `locations` — Reactor needs two DIFFERENT people at two DIFFERENT spots
+// (Bel Aire Court and Leavesley Place, matching the existing tasks' real-world
+// coordinates there); O2 and Comms each need exactly one person at one spot.
+// duration is the DEFAULT_SETTINGS/SETTING_LIMITS key for how long that
+// sabotage runs before auto-winning the impostor — null means no time limit
+// (Comms just stays down until fixed, and never ends the game on its own).
 const SABOTAGE_SPOTS = {
-  reactor: { type: 'reactor', name: 'Reactor', label: 'Bel Aire Court', lat: 37.30752, lng: -122.05764 },
-  o2: { type: 'o2', name: 'O2', label: 'Leavesley Place', lat: 37.31044, lng: -122.05753 },
+  reactor: {
+    type: 'reactor',
+    name: 'Reactor',
+    duration: 'sabotageReactorDuration',
+    cooldownField: 'sabotageCooldownUntil',
+    cooldownSetting: 'sabotageCooldown',
+    locations: [
+      { label: 'Bel Aire Court', lat: 37.30752, lng: -122.05764 },
+      { label: 'Leavesley Place', lat: 37.31044, lng: -122.05753 },
+    ],
+  },
+  o2: {
+    type: 'o2',
+    name: 'O2',
+    duration: 'sabotageO2Duration',
+    cooldownField: 'sabotageCooldownUntil',
+    cooldownSetting: 'sabotageCooldown',
+    // Rae Lane, right in front of the Pool & Racquet Club entrance — placeholder
+    // coordinate near the existing "Finding Garbage (Rae Lane)" task pending the
+    // exact entrance location; nudge lat/lng here once confirmed on site.
+    locations: [
+      { label: 'Rae Lane (Pool & Racquet Club)', lat: 37.31199, lng: -122.06060 },
+    ],
+  },
+  comms: {
+    type: 'comms',
+    name: 'Comms',
+    duration: null, // no time limit — stays down until fixed, never ends the game
+    cooldownField: 'commsCooldownUntil',
+    cooldownSetting: 'commsCooldown',
+    locations: [
+      { label: 'Baxley Court', lat: 37.30925, lng: -122.06055 },
+    ],
+  },
 };
 
 // Tasks every new game starts with (name, location, and detailed
@@ -820,10 +858,13 @@ function meetingSpotRange(m, settings) {
 // long as they're near one of the designated meeting spots AND the room-wide
 // cooldown from the last emergency call has expired (see
 // emergencyCooldownEffectiveEndsAt — that cooldown pauses for the duration of
-// any meeting, including this one, via startMeeting/doTally).
+// any meeting, including this one, via startMeeting/doTally) AND Comms isn't
+// currently sabotaged (that's the whole point of Comms — it cuts off the
+// crew's ability to call a meeting until someone fixes it).
 function tryCallVote(room, actor) {
   if (room.phase !== 'playing') return 'You can only call a meeting during play.';
   if (!actor.alive) return 'You must be alive to call a meeting.';
+  if (room.sabotage && room.sabotage.type === 'comms') return 'Comms are down — emergency meetings are disabled until fixed.';
   if (emergencyCooldownEffectiveEndsAt(room) > now()) return 'Emergency meeting is still on cooldown.';
   // If the host hasn't set any meeting-call spots, calling stays unrestricted
   // (old behavior) instead of silently becoming impossible.
@@ -905,9 +946,11 @@ function tryBlockLocation(room, actor, segmentId) {
 }
 
 // Same idea as blockEffectiveEndsAt, for the one active sabotage (there's
-// never more than one — see trySabotage).
+// never more than one — see trySabotage). Returns null both when there's no
+// active sabotage AND when the active one has no time limit (Comms) — either
+// way, there's no countdown to show or schedule a timeout against.
 function sabotageEffectiveEndsAt(room) {
-  if (!room.sabotage) return null;
+  if (!room.sabotage || room.sabotage.endsAt == null) return null;
   return room.sabotage.pausedRemainingMs != null ? now() + room.sabotage.pausedRemainingMs : room.sabotage.endsAt;
 }
 
@@ -924,12 +967,16 @@ function emergencyCooldownEffectiveEndsAt(room) {
 // sabotage isn't fixed in time. Unlike a road block, a sabotage needs an
 // actual action to fire at expiry, not just a passive "has this expired"
 // check — so this mirrors room.meetingTimer's pattern, including being
-// cleared/recreated across a pause (see startMeeting/doTally).
+// cleared/recreated across a pause (see startMeeting/doTally). A no-time-limit
+// sabotage (Comms) has nothing to schedule — sabotageEffectiveEndsAt returns
+// null for it, so this just clears any leftover timer and stops.
 function scheduleSabotageTimeout(room) {
   if (room.sabotageTimer) clearTimeout(room.sabotageTimer);
   room.sabotageTimer = null;
   if (!room.sabotage) return;
-  const ms = sabotageEffectiveEndsAt(room) - now();
+  const endsAt = sabotageEffectiveEndsAt(room);
+  if (endsAt == null) return;
+  const ms = endsAt - now();
   room.sabotageTimer = setTimeout(() => {
     if (room.phase !== 'playing' || !room.sabotage) return; // game already ended some other way
     finishSabotage(room, 'timeout');
@@ -953,31 +1000,36 @@ function finishSabotage(room, outcome) {
 }
 
 // Impostor-only, repeatable on a cooldown (no per-game usage cap like Block
-// Location's segments) — but only one sabotage (of either kind) can ever be
-// active at once, and it's mutually exclusive with an active road block in
-// both directions (see tryBlockLocation).
+// Location's segments) — but only one sabotage (of any kind — Reactor, O2, or
+// Comms) can ever be active at once (the room.sabotage check below), and it's
+// mutually exclusive with an active road block in both directions (see
+// tryBlockLocation). Reactor and O2 share one cooldown (sabotageCooldownUntil);
+// Comms has its own, separate cooldown (commsCooldownUntil) — see each spot's
+// cooldownField/cooldownSetting in SABOTAGE_SPOTS.
 function trySabotage(room, actor, type) {
   if (room.phase !== 'playing') return 'Not right now.';
   if (actor.role !== 'impostor') return 'Not available to crew.';
   if (!actor.alive) return 'You must be alive to do that.';
   const spot = SABOTAGE_SPOTS[type];
   if (!spot) return 'Unknown sabotage.';
-  if (now() < (actor.sabotageCooldownUntil || 0)) return 'Sabotage is still on cooldown.';
+  if (now() < (actor[spot.cooldownField] || 0)) return 'Sabotage is still on cooldown.';
   if (room.sabotage) return 'A sabotage is already in progress.';
   if (room.activeBlocks.some((b) => blockEffectiveEndsAt(room, b) > now())) {
     return 'You cannot sabotage while a road is blocked.';
   }
   const s = room.settings;
-  const duration = type === 'reactor' ? s.sabotageReactorDuration : s.sabotageO2Duration;
-  actor.sabotageCooldownUntil = now() + s.sabotageCooldown * 1000;
+  actor[spot.cooldownField] = now() + s[spot.cooldownSetting] * 1000;
+  const durationSecs = spot.duration ? s[spot.duration] : null;
   room.sabotage = {
     id: room.nextSabotageId++,
     type,
     code: String(Math.floor(10000 + Math.random() * 90000)), // shown to everyone, not a secret — see tryTask's honor-system precedent
-    endsAt: now() + duration * 1000,
+    endsAt: durationSecs != null ? now() + durationSecs * 1000 : null, // null = no time limit (Comms)
     pausedRemainingMs: null,
-    fixedBy: [], // player keys who've entered the code correctly
-    required: type === 'reactor' ? 2 : 1,
+    // One entry per fix location, in order — fixedBy is a player key once
+    // fixed, or null while pending. Reactor has two (different spots, so a
+    // fixer picks which one they're at); O2/Comms have exactly one.
+    locations: spot.locations.map((l) => ({ label: l.label, lat: l.lat, lng: l.lng, fixedBy: null })),
   };
   scheduleSabotageTimeout(room);
   return null;
@@ -986,17 +1038,39 @@ function trySabotage(room, actor, type) {
 // Entering the code is honor-system for distance, same as tryTask — the
 // client shows the same "you don't seem to be there, are you sure?" confirm
 // dialog and submits regardless, rather than this rejecting a real fix over
-// a GPS discrepancy. Anyone (impostor included) can contribute.
-function trySabotageFix(room, actor, code) {
+// a GPS discrepancy. Anyone (impostor included) can contribute. locationIndex
+// picks which of the sabotage's fix locations this counts toward — the client
+// sends the one nearest to the player (or the only one, for single-spot
+// sabotages); defaults to the first still-unfixed location if omitted. Each
+// player can only ever fix one location per sabotage instance, so Reactor's
+// two spots genuinely need two different people.
+function trySabotageFix(room, actor, code, locationIndex) {
   if (!room.sabotage) return 'Nothing to fix right now.';
   if (room.phase !== 'playing') return 'Not right now.';
   if (!actor.alive && !actor.ejected && !actor.foundDead) return "You haven't been found yet — stay put.";
   if (!actor.alive && !room.settings.sabotageDeadCanFix) return 'Only living players can fix sabotages in this game.';
   if (String(code || '').trim() !== room.sabotage.code) return 'Wrong code.';
-  if (room.sabotage.fixedBy.includes(actor.key)) return "You've already helped fix this one.";
-  room.sabotage.fixedBy.push(actor.key);
-  if (room.sabotage.fixedBy.length >= room.sabotage.required) {
+  if (room.sabotage.locations.some((l) => l.fixedBy === actor.key)) return "You've already helped fix this one.";
+  const idx = Number.isInteger(locationIndex) ? locationIndex : room.sabotage.locations.findIndex((l) => !l.fixedBy);
+  const loc = room.sabotage.locations[idx];
+  if (!loc) return 'Unknown location.';
+  if (loc.fixedBy) return "That spot's already been fixed — check the other one.";
+  loc.fixedBy = actor.key;
+  const remaining = room.sabotage.locations.filter((l) => !l.fixedBy);
+  if (!remaining.length) {
     finishSabotage(room, 'fixed');
+  } else {
+    // Partial fix (only possible for Reactor, the only multi-location type) —
+    // announce which spot just got fixed and which one is still outstanding,
+    // same reveal-modal mechanism as a full fix/start (see lastSabotageResult
+    // handling in app.js).
+    room.lastSabotageResult = {
+      type: room.sabotage.type,
+      outcome: 'partial',
+      at: now(),
+      fixedLabel: loc.label,
+      remainingLabel: remaining.map((l) => l.label).join(' and '),
+    };
   }
   return null;
 }
@@ -1072,18 +1146,27 @@ function viewFor(room, p) {
       .filter((b) => blockEffectiveEndsAt(room, b) > now())
       .map((b) => ({ id: b.id, name: b.name, points: b.points, endsAt: blockEffectiveEndsAt(room, b) })),
     // Fixed sabotage spots, always visible so everyone knows where they are —
-    // separate from the currently-active sabotage (if any) below.
-    sabotageSpots: Object.values(SABOTAGE_SPOTS),
+    // separate from the currently-active sabotage (if any) below. Only the
+    // public shape goes out — cooldownField/cooldownSetting/duration are
+    // internal bookkeeping, not sent to clients.
+    sabotageSpots: Object.values(SABOTAGE_SPOTS).map((s) => ({
+      type: s.type,
+      name: s.name,
+      locations: s.locations.map((l) => ({ label: l.label, lat: l.lat, lng: l.lng })),
+    })),
     // The code is shown to everyone on purpose (see trySabotage) — it's a
-    // proximity/participation gate, not a secret to find.
+    // proximity/participation gate, not a secret to find. Per-location
+    // `fixed` is only a boolean — WHO fixed which spot stays server-side,
+    // same privacy convention as who placed a road block.
     sabotage: room.sabotage ? {
       id: room.sabotage.id,
       type: room.sabotage.type,
       code: room.sabotage.code,
-      endsAt: sabotageEffectiveEndsAt(room),
-      fixedCount: room.sabotage.fixedBy.length,
-      required: room.sabotage.required,
-      fixedByYou: room.sabotage.fixedBy.includes(p.key),
+      endsAt: sabotageEffectiveEndsAt(room), // null = no time limit (Comms)
+      locations: room.sabotage.locations.map((l) => ({ label: l.label, lat: l.lat, lng: l.lng, fixed: !!l.fixedBy })),
+      fixedCount: room.sabotage.locations.filter((l) => l.fixedBy).length,
+      required: room.sabotage.locations.length,
+      fixedByYou: room.sabotage.locations.some((l) => l.fixedBy === p.key),
     } : null,
     // Kept even into the 'ended' phase (unlike room.sabotage itself) so the
     // "was fixed" reveal and the end screen's sabotage-timeout message both
@@ -1120,6 +1203,7 @@ function viewFor(room, p) {
       blockCooldownUntil: p.blockCooldownUntil || 0,
       usedSegments: p.usedSegments || [],
       sabotageCooldownUntil: p.sabotageCooldownUntil || 0,
+      commsCooldownUntil: p.commsCooldownUntil || 0,
       // Private to this player alone — living players and other ghosts never
       // learn who's Troll vs Helper, only the fixed-format hints they send.
       ghostRole: p.ghostRole || null,
@@ -1190,6 +1274,7 @@ function viewFor(room, p) {
         blockCooldownUntil: b.blockCooldownUntil || 0,
         usedSegments: b.usedSegments || [],
         sabotageCooldownUntil: b.sabotageCooldownUntil || 0,
+        commsCooldownUntil: b.commsCooldownUntil || 0,
       }));
     }
   }
@@ -1238,7 +1323,8 @@ function makePlayer(key, name, socketId) {
     usedSegments: [],      // impostor-only: street section ids this player has already blocked this game (never reusable)
     ghostRole: null,           // 'troll' or 'helper', assigned the instant this player is killed
     ghostChatCooldownUntil: 0, // wall-clock time this ghost can send another hint
-    sabotageCooldownUntil: 0,  // impostor-only: wall-clock time Sabotage becomes available again
+    sabotageCooldownUntil: 0,  // impostor-only: wall-clock time Reactor/O2 sabotage becomes available again
+    commsCooldownUntil: 0,     // impostor-only: wall-clock time Comms sabotage becomes available again (separate cooldown)
   };
 }
 
@@ -1492,6 +1578,7 @@ io.on('connection', (socket) => {
       p.ghostRole = null;
       p.ghostChatCooldownUntil = 0;
       p.sabotageCooldownUntil = 0;
+      p.commsCooldownUntil = 0;
       // Short opening grace instead of a full cooldown: long enough that nobody
       // gets knifed while role cards are still on screen, but the impostor can
       // hunt right away. (After that, kills use the full cooldown as usual.)
@@ -1662,10 +1749,10 @@ io.on('connection', (socket) => {
     broadcast(room);
   });
 
-  socket.on('sabotageFix', ({ code }) => {
+  socket.on('sabotageFix', ({ code, locationIndex }) => {
     const { room, player } = ctx();
     if (!room || !player) return;
-    const err = trySabotageFix(room, player, code);
+    const err = trySabotageFix(room, player, code, locationIndex);
     if (err) return fail(err);
     broadcast(room);
   });
@@ -1753,8 +1840,8 @@ io.on('connection', (socket) => {
     else if (action === 'callVote') err = tryCallVote(room, bot);
     else if (action === 'seeLocation') err = trySeeLocation(room, bot);
     else if (action === 'blockLocation') err = tryBlockLocation(room, bot, target);
-    else if (action === 'sabotage') err = trySabotage(room, bot, target); // target: 'reactor' | 'o2'
-    else if (action === 'sabotageFix') err = trySabotageFix(room, bot, room.sabotage ? room.sabotage.code : '');
+    else if (action === 'sabotage') err = trySabotage(room, bot, target); // target: 'reactor' | 'o2' | 'comms'
+    else if (action === 'sabotageFix') err = trySabotageFix(room, bot, room.sabotage ? room.sabotage.code : '', target != null ? Number(target) : undefined); // target: optional locationIndex
     if (err) return fail(`${bot.name}: ${err}`);
     broadcast(room);
   });
