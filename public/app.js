@@ -2266,6 +2266,12 @@ $('btn-meetingloc-add').onclick = () => {
   if (addingMeetingLocation) toast('Tap the map to add a meeting spot. Tap the button again to stop.');
 };
 $('btn-again').onclick = () => socket.emit('again');
+$('btn-leave-lobby').onclick = async () => {
+  if (!(await askYesNo('Leave this room and go back to the homepage?'))) return;
+  socket.emit('leave');
+  localStorage.removeItem('auRoom');
+  showScreen('home');
+};
 $('btn-endgame-early').onclick = async () => {
   if (await askYesNo('Are you sure you want to end this game early?')) socket.emit('endEarly');
 };

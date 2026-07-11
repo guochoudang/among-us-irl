@@ -1846,6 +1846,27 @@ io.on('connection', (socket) => {
     broadcast(room);
   });
 
+  // Lets someone who created/joined a room by accident back out to the
+  // homepage before the game starts, instead of being stuck in the lobby.
+  socket.on('leave', () => {
+    const { room, player } = ctx();
+    if (!room || !player || room.phase !== 'lobby') return;
+    const wasHost = player.key === room.hostKey;
+    delete room.players[player.key];
+    if (wasHost) {
+      // Test bots are host-only tools; they're meaningless without a host.
+      for (const [key, p] of Object.entries(room.players)) {
+        if (p.isBot) delete room.players[key];
+      }
+      const next = Object.values(room.players)[0];
+      room.hostKey = next ? next.key : null;
+    }
+    socket.data.roomCode = null;
+    socket.data.playerKey = null;
+    applyAutoScale(room);
+    broadcast(room);
+  });
+
   socket.on('again', () => {
     const { room, player } = ctx();
     if (!room || !player || player.key !== room.hostKey) return;
